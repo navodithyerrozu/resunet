@@ -1,0 +1,22 @@
+<# Sans-serif variant, conventional for engineering roles.
+
+   Helvetica via psnfss ships in texlive-fonts-recommended, which the render
+   image already installs -- no new package in the Dockerfile. The \sfdefault
+   override is required because the helvet package only *provides* the family;
+   it does not make it the document default.
+
+   Sans-serif is a presentation choice with no extraction penalty: what matters
+   for parsing is the ToUnicode map, which glyphtounicode handles identically
+   for both families. #>
+<% extends "_base.tex.j2" %>
+
+<% block fontsize %>10pt<% endblock %>
+
+<% block fontpackage %>
+\usepackage[scaled=0.92]{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+<% endblock %>
+
+<% block margintop %>0.5in<% endblock %>
+<% block marginbottom %>0.5in<% endblock %>
+<% block bulletindent %>0.16in<% endblock %>

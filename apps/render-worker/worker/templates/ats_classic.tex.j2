@@ -1,0 +1,9 @@
+<# Default template. Serif, generous spacing, 11pt -- the safest possible
+   choice and the right default for most users: Latin Modern is metrically
+   ordinary, so extraction is boring and reliable.
+
+   Suitable for one to two pages of content. Users with more should switch to
+   ats_compact rather than shrinking margins here. #>
+<% extends "_base.tex.j2" %>
+
+<% block fontsize %>11pt<% endblock %>

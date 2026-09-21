@@ -1,0 +1,59 @@
+[project]
+name = "resunet-render-worker"
+version = "0.1.0"
+description = "LaTeX to PDF render worker and ATS text-extraction scorer for ResuNet"
+requires-python = ">=3.12"
+
+dependencies = [
+    "arq>=0.26.0",
+    "motor>=3.6.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "jinja2>=3.1.4",
+    "structlog>=24.4.0",
+    # PDF text extraction for ATS scoring. pypdf's naive extraction is the
+    # point, not a limitation -- see worker/tasks/score.py.
+    "pypdf>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "mypy>=1.11.0",
+    "ruff>=0.6.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["worker*"]
+
+[tool.setuptools.package-data]
+worker = ["templates/*.j2"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "ASYNC", "S", "C4", "RET", "SIM"]
+# S603/S607 flag subprocess use. Compiling LaTeX *is* this service's job; the
+# call is argument-list form with a fixed binary and no shell, which is the
+# safe pattern S603 exists to encourage.
+ignore = ["S603", "S607"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

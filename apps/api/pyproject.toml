@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "resunet-api"
+version = "0.1.0"
+description = "ResuNet FastAPI backend: resume generation, ATS scoring, job matching, application orchestration."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.6",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.2",
+    "email-validator>=2.2.0",
+    "motor>=3.6.0",
+    "pymongo>=4.9.0",
+    "arq>=0.26.0",
+    "redis>=5.0.8",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[argon2]>=1.7.4",
+    "python-multipart>=0.0.9",
+    "cryptography>=43.0.1",
+    "langgraph>=0.2.28",
+    "langchain-core>=0.3.8",
+    "langchain-anthropic>=0.2.3",
+    "langgraph-checkpoint-mongodb>=0.1.0",
+    "httpx>=0.27.2",
+    "structlog>=24.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "mypy>=1.11.2",
+    "ruff>=0.6.8",
+    "mongomock-motor>=0.0.34",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "ASYNC", "S", "C4", "RET", "SIM"]
+# S101 (assert) is fine in tests; B008 is FastAPI's Depends() idiom.
+ignore = ["B008", "S104"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+warn_unused_ignores = true
+disallow_untyped_defs = true
+# Third-party packages without bundled stubs.
+[[tool.mypy.overrides]]
+module = ["motor.*", "arq.*", "jose.*", "passlib.*", "langgraph.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

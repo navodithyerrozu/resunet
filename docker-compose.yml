@@ -1,0 +1,129 @@
+# ---------------------------------------------------------------------------
+# ResuNet local development stack.
+#
+# Mongo runs as a single-node replica set because the application-submission
+# flow writes across `applications` and `resume_versions` in one transaction,
+# and multi-document transactions require a replica set even locally.
+# ---------------------------------------------------------------------------
+name: resunet
+
+services:
+  mongo:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      # Initiates the replica set on first boot, then reports healthy once
+      # a primary has been elected.
+      test: >
+        mongosh --quiet --eval "
+          try { rs.status().ok }
+          catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}).ok }
+        "
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    env_file: .env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+      REDIS_URI: redis://redis:6379/0
+      # The API is deliberately NOT given the credential decryption key.
+      CREDENTIAL_ENCRYPTION_KEY: ""
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api:/srv/api
+      - render_storage:/srv/storage/renders
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command:
+      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  render-worker:
+    build:
+      context: .
+      dockerfile: infra/docker/render-worker.Dockerfile
+    env_file: .env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+      REDIS_URI: redis://redis:6379/0
+    volumes:
+      - ./apps/render-worker:/srv/render-worker
+      - render_storage:/srv/storage/renders
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["arq", "worker.main.WorkerSettings"]
+
+  automation-worker:
+    build:
+      context: .
+      dockerfile: infra/docker/automation-worker.Dockerfile
+    env_file: .env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+      REDIS_URI: redis://redis:6379/0
+    # Chromium needs more shared memory than Docker's 64MB default or it
+    # crashes on content-heavy pages.
+    shm_size: "1gb"
+    volumes:
+      - ./apps/automation-worker:/srv/automation-worker
+      - render_storage:/srv/storage/renders:ro
+      - automation_traces:/srv/storage/traces
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["arq", "worker.main.WorkerSettings"]
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    env_file: .env
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/web:/srv/apps/web
+      - ./packages/shared:/srv/packages/shared
+      - web_node_modules:/srv/apps/web/node_modules
+    depends_on:
+      - api
+    command: ["pnpm", "dev"]
+
+volumes:
+  mongo_data:
+  redis_data:
+  render_storage:
+  automation_traces:
+  web_node_modules:

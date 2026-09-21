@@ -1,0 +1,58 @@
+[project]
+name = "resunet-automation-worker"
+version = "0.1.0"
+description = "Playwright job-application submission worker for ResuNet"
+requires-python = ">=3.12"
+
+dependencies = [
+    "arq>=0.26.0",
+    "motor>=3.6.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "structlog>=24.4.0",
+    # Pinned exactly, not floated. The browser build is baked into the Docker
+    # base image at a matching tag, and a client/browser version mismatch fails
+    # at runtime rather than at build time -- i.e. in production, on a real
+    # submission, after the form is already half filled.
+    "playwright==1.47.0",
+    "cryptography>=43.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "mypy>=1.11.0",
+    "ruff>=0.6.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["worker*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "ASYNC", "S", "C4", "RET", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+# Randomised interaction timing uses `random`, which S311 flags as
+# non-cryptographic. That is correct and irrelevant: the randomness exists to
+# look human, not to resist an adversary predicting it.
+"worker/humanize.py" = ["S311"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

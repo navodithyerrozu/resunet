@@ -1,0 +1,189 @@
+@import "tailwindcss";
+
+/*
+ * ResuNet design tokens
+ * =====================
+ *
+ * Direction: an instrument panel for a job search, not a marketing page. The
+ * user is running many applications in parallel and the interface's job is to
+ * say what is in flight and what is stuck on them.
+ *
+ * The signature is the XYZ triad. The product's entire argument is that a resume
+ * bullet is three separable things -- what you did, what it measured, how you
+ * did it -- and that the middle one is non-negotiable. So the triad is visible
+ * in the UI rather than implied: each component carries its own hue wherever a
+ * bullet appears, and the metric is set in mono with tabular figures because a
+ * metric is a measurement and measurements should line up in a column.
+ *
+ * Boldness is spent there and nowhere else. Everything around it is quiet: cool
+ * neutrals, one weight of rule, no gradients, no shadows deeper than a hairline.
+ */
+
+@theme {
+  /* Cool neutrals. Deliberately blue-grey rather than warm -- this is a tool,
+     and the warm-paper palette reads as editorial. */
+  --color-paper: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-sunken: #eef0f4;
+  --color-ink: #14161a;
+  --color-muted: #5c6470;
+  --color-faint: #8b94a1;
+  --color-line: #dfe3e9;
+  --color-line-strong: #c3cad4;
+
+  /* The XYZ roles. Three hues, used only as small chips, left rules, and
+     labels -- never as fills, or the triad stops reading as structure and
+     starts reading as decoration. */
+  --color-role-x: #14675a; /* action  -- what you did */
+  --color-role-y: #8a2e5d; /* metric  -- what it measured */
+  --color-role-z: #34478f; /* method  -- how you did it */
+
+  --color-role-x-wash: #e7f1ef;
+  --color-role-y-wash: #f7e9f0;
+  --color-role-z-wash: #e9ecf7;
+
+  /* The metric hue doubles as the primary accent. That is a deliberate choice
+     rather than a coincidence: the thing the product insists on is the thing
+     the interface points at. */
+  --color-accent: #8a2e5d;
+  --color-accent-hover: #71264c;
+
+  /* Functional status. Separate from the role hues so a red bullet chip can
+     never be confused with a failed application. */
+  --color-ok: #166534;
+  --color-ok-wash: #e6f2ea;
+  --color-warn: #9a6700;
+  --color-warn-wash: #fdf2dc;
+  --color-danger: #b4252a;
+  --color-danger-wash: #fbeaea;
+
+  --font-display: var(--font-instrument), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-instrument), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-jb), ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* A tight scale. Display sizes are set with negative tracking because
+     Instrument Sans opens up badly at large sizes otherwise. */
+  --text-display: 2.75rem;
+  --text-display--line-height: 1.04;
+  --text-display--letter-spacing: -0.028em;
+
+  --text-title: 1.5rem;
+  --text-title--line-height: 1.16;
+  --text-title--letter-spacing: -0.018em;
+
+  --text-eyebrow: 0.6875rem;
+  --text-eyebrow--line-height: 1.2;
+  --text-eyebrow--letter-spacing: 0.1em;
+
+  --radius-card: 4px;
+  --radius-chip: 3px;
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    font-size: 0.9375rem;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Numbers should line up in every table and every metric slot. */
+  table,
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 560;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Keyboard focus must be visible without putting a ring on every mouse
+     click. `:focus-visible` handles that; the offset keeps the ring off the
+     glyphs. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  button:focus:not(:focus-visible),
+  a:focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Respect the OS setting. Anything decorative stops; nothing that conveys
+     state depends on motion to be understood. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* An eyebrow label. Used to type a section, not to decorate it -- if the
+     label is not saying something the heading cannot, it should be deleted. */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: var(--text-eyebrow);
+    letter-spacing: var(--text-eyebrow--letter-spacing);
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  /*
+   * The XYZ slot. Three of these stack to form one bullet, each carrying its
+   * role hue on the left edge. The rule is 2px and the hue appears nowhere
+   * else in the row, so the structure of the data is legible at a glance and
+   * a missing metric is visible as a gap rather than as prose that reads fine.
+   */
+  .xyz-slot {
+    border-left: 2px solid var(--slot-hue, var(--color-line-strong));
+    padding-left: 0.75rem;
+  }
+
+  .xyz-slot[data-role="action"] {
+    --slot-hue: var(--color-role-x);
+  }
+  .xyz-slot[data-role="metric"] {
+    --slot-hue: var(--color-role-y);
+  }
+  .xyz-slot[data-role="method"] {
+    --slot-hue: var(--color-role-z);
+  }
+
+  /* A metric that failed validation. Dashed, because the slot is structurally
+     present but not yet satisfied -- solid would read as "fine". */
+  .xyz-slot[data-role="metric"][data-invalid="true"] {
+    border-left-style: dashed;
+  }
+}
