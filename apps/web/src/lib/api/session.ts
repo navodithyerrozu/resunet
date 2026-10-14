@@ -1,6 +1,7 @@
 import "server-only";
 
 import { cookies } from "next/headers";
+import { cache } from "react";
 
 /**
  * The session boundary.
@@ -29,6 +30,24 @@ import { cookies } from "next/headers";
 
 const ACCESS_COOKIE = "resunet_at";
 const REFRESH_COOKIE = "resunet_rt";
+
+/**
+ * Request-scoped fallback for a freshly rotated access token.
+ *
+ * Next.js 15 forbids `cookies().set()` during a Server Component render, so
+ * `refreshSession` may succeed against FastAPI and still be unable to persist
+ * the pair. `cache()` is per-request, not per-process, so two concurrent users
+ * cannot observe each other's override -- unlike a module-level `let`.
+ */
+const accessTokenOverride = cache((): { value: string | null } => ({ value: null }));
+
+export function bindAccessToken(token: string): void {
+  accessTokenOverride().value = token;
+}
+
+export function clearAccessTokenOverride(): void {
+  accessTokenOverride().value = null;
+}
 
 /** Cookie attributes shared by both tokens. */
 function baseCookieOptions() {
@@ -82,6 +101,8 @@ export async function clearSession(): Promise<void> {
 }
 
 export async function readAccessToken(): Promise<string | null> {
+  const override = accessTokenOverride().value;
+  if (override !== null) return override;
   const jar = await cookies();
   return jar.get(ACCESS_COOKIE)?.value ?? null;
 }

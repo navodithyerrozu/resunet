@@ -12,11 +12,11 @@ import {
   funnelStats,
   listApplications,
   listBullets,
+  listProfileSkills,
   listResumes,
   topRecommendations,
 } from "@/lib/api/endpoints";
 import { pluralize } from "@/lib/format";
-import { skillCounts } from "@/lib/skills";
 
 import type { Metadata } from "next";
 import type { ApplicationSummary, ResumeSummary } from "@resunet/shared";
@@ -62,25 +62,23 @@ function actionFor(status: ApplicationSummary["status"]): "approve" | "retry" | 
 export default async function DashboardPage() {
   // One `withFreshSession` around the whole fan-out, so an expired access token
   // triggers exactly one refresh instead of four racing ones.
-  const [funnel, applications, resumes, recommendations] = await withFreshSession(() =>
+  const [funnel, applications, resumes, recommendations, skills] = await withFreshSession(() =>
     Promise.all([
       funnelStats(),
       listApplications({ limit: 50 }),
       listResumes({ limit: 10 }),
       topRecommendations(),
+      listProfileSkills(),
     ]),
   );
 
-  // Second round trip, and it should not be one -- see the note in `lib/skills.ts`
-  // about the aggregate endpoint this wants. Guarded so a user with no resumes
-  // does not get a request for `/resumes/undefined/bullets`.
+  // Bullet counts still come from the primary resume so the "evidenced bullets"
+  // stat stays tied to a working copy, not the cross-resume skill pile.
   const primaryResume = resumes.items[0];
   const bullets =
     primaryResume !== undefined
       ? await withFreshSession(() => listBullets(primaryResume.id, { limit: 200 }))
       : null;
-
-  const skills = bullets !== null ? skillCounts(bullets.items) : [];
   const compliantBullets = bullets?.items.filter((b) => b.violations.length === 0).length ?? 0;
   const totalBullets = bullets?.items.length ?? 0;
 

@@ -58,6 +58,15 @@
  */
 
 export type paths = {
+  "/api/v1/auth/register": {
+    post: {
+      requestBody: { content: { "application/json": components["schemas"]["UserCreate"] } };
+      responses: {
+        201: { content: { "application/json": components["schemas"]["TokenPair"] } };
+        409: { content: { "application/json": components["schemas"]["ErrorBody"] } };
+      };
+    };
+  };
   "/api/v1/auth/login": {
     post: {
       requestBody: { content: { "application/json": components["schemas"]["UserLogin"] } };
@@ -119,6 +128,18 @@ export type paths = {
       responses: {
         200: { content: { "application/json": components["schemas"]["Page_Bullet_"] } };
       };
+    };
+  };
+  "/api/v1/resumes/{resume_id}/pdf": {
+    get: {
+      parameters: { path: { resume_id: string }; query?: { v?: number } };
+      responses: { 200: { content: { "application/pdf": string } } };
+    };
+  };
+  "/api/v1/resumes/{resume_id}/versions/{version_id}/pdf": {
+    get: {
+      parameters: { path: { resume_id: string; version_id: string } };
+      responses: { 200: { content: { "application/pdf": string } } };
     };
   };
   "/api/v1/resumes/{resume_id}/render": {
@@ -200,6 +221,13 @@ export type paths = {
   "/api/v1/applications/stats/funnel": {
     get: {
       responses: { 200: { content: { "application/json": Record<string, number> } } };
+    };
+  };
+  "/api/v1/profile/skills": {
+    get: {
+      responses: {
+        200: { content: { "application/json": components["schemas"]["SkillCount"][] } };
+      };
     };
   };
   "/api/v1/jobs": {
@@ -873,6 +901,11 @@ export type components = {
       category: string | null;
       proficiency: components["schemas"]["SkillProficiency"];
       years: number | null;
+    };
+
+    SkillCount: {
+      name: string;
+      count: number;
     };
 
     SkillProficiency: "familiar" | "proficient" | "advanced" | "expert";

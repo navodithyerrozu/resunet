@@ -9,13 +9,9 @@ import type { SkillWeight } from "@/components/physics/SkillPile";
  * claimed somewhere. A skill attached only to a bullet with no metric has not
  * earned a place in it.
  *
- * BACKEND FOLLOW-UP: the dashboard currently derives this from one resume's
- * bullets because there is no aggregate endpoint. That is an N+1 waiting to
- * happen -- a user with twelve resumes would need twelve requests to get a true
- * picture. The right shape is a single `GET /profile/skills` backed by a Mongo
- * aggregation over the `bullets` collection, grouping by `skills` with a
- * `$match` on `violations: []`. Until that exists, treat the pile as
- * "skills in this resume", which is what it honestly shows.
+ * Prefer `listProfileSkills()` (GET /profile/skills) for the dashboard pile;
+ * that aggregation covers every resume. This helper remains for a single
+ * resume's editor view.
  */
 export function skillCounts(bullets: Bullet[], limit = 18): SkillWeight[] {
   const counts = new Map<string, number>();

@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { LoginForm } from "@/components/auth/LoginForm";
 
 import type { Metadata } from "next";
@@ -87,7 +89,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
             expired={params.reason === "expired"}
           />
           <p className="mt-6 text-xs text-faint">
-            Accounts are created by the API. There is no self-serve sign-up yet.
+            No account?{" "}
+            <Link href="/register" className="text-muted hover:text-ink">
+              Create one
+            </Link>
           </p>
         </div>
       </div>

@@ -124,6 +124,33 @@ async def list_applications(
     )
 
 
+@router.get("/stats/funnel", summary="Application funnel stats")
+async def funnel_stats(user: CurrentUser) -> dict[str, int]:
+    """Aggregate counts per pipeline stage for the dashboard.
+
+    Flat `status -> count` so the tracker and dashboard can index by enum
+    member without unpacking a nested envelope.
+
+    TODO: a single `$group` on status, filtered by user_id.
+    """
+    _ = user.id
+    return {
+        "draft": 2,
+        "queued": 4,
+        "submitting": 1,
+        "awaiting_approval": 2,
+        "submitted": 31,
+        "failed": 2,
+        "acknowledged": 12,
+        "screening": 6,
+        "interviewing": 3,
+        "offer": 1,
+        "rejected": 14,
+        "withdrawn": 1,
+        "ghosted": 8,
+    }
+
+
 @router.get("/{application_id}", response_model=Application, summary="Get an application")
 async def get_application(application_id: str, user: CurrentUser) -> Application:
     """Full application including every submission attempt.
@@ -240,25 +267,3 @@ async def retry_submission(application_id: str, user: CurrentUser) -> Applicatio
     )
 
 
-@router.get("/stats/funnel", summary="Application funnel stats")
-async def funnel_stats(user: CurrentUser) -> dict[str, object]:
-    """Aggregate counts per pipeline stage for the dashboard.
-
-    TODO: a single `$group` on status, filtered by user_id.
-    """
-    return {
-        "total": 47,
-        "by_status": {
-            "submitted": 31,
-            "acknowledged": 12,
-            "screening": 6,
-            "interviewing": 3,
-            "offer": 1,
-            "rejected": 14,
-            "ghosted": 8,
-            "failed": 2,
-        },
-        "response_rate": 0.42,
-        "interview_rate": 0.096,
-        "median_days_to_response": 6,
-    }

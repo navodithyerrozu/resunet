@@ -58,6 +58,7 @@ HAND_WRITTEN = ("Page_", "ErrorBody")
 
 SCALARS = {
     "str": "string",
+    "EmailStr": "string",
     "PyObjectId": "string",
     "int": "number",
     "float": "number",

@@ -1,7 +1,14 @@
 import "server-only";
 
 import { ApiError, ApiTimeoutError, UnauthorizedError, detailFrom, parseFieldErrors } from "./errors";
-import { clearSession, readAccessToken, readRefreshToken, writeSession } from "./session";
+import {
+  bindAccessToken,
+  clearAccessTokenOverride,
+  clearSession,
+  readAccessToken,
+  readRefreshToken,
+  writeSession,
+} from "./session";
 
 import type { TokenPair } from "@resunet/shared";
 
@@ -160,21 +167,98 @@ export async function refreshSession(): Promise<boolean> {
       body: { refresh_token: refreshToken },
       authenticated: false,
     });
-    await writeSession({
-      accessToken: pair.accessToken,
-      refreshToken: pair.refreshToken,
-      expiresIn: pair.expiresIn,
-    });
+    // Always bind the new access token for the rest of this request first.
+    // Server Components cannot write cookies during render; without the
+    // override, `apiFetch` would retry with the same expired cookie and 401 loop.
+    bindAccessToken(pair.accessToken);
+    try {
+      await writeSession({
+        accessToken: pair.accessToken,
+        refreshToken: pair.refreshToken,
+        expiresIn: pair.expiresIn,
+      });
+    } catch (error) {
+      if (!isCookieMutationError(error)) throw error;
+    }
     return true;
   } catch (error) {
     if (error instanceof UnauthorizedError) {
-      await clearSession();
+      clearAccessTokenOverride();
+      try {
+        await clearSession();
+      } catch (cookieError) {
+        if (!isCookieMutationError(cookieError)) throw cookieError;
+      }
       return false;
     }
     // A timeout or a 503 is not proof the session is invalid, so the cookies
     // are left alone and the caller can try again.
     throw error;
   }
+}
+
+/** Next.js 15 throws if `cookies().set()` runs while rendering a Server Component. */
+function isCookieMutationError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("Cookies can only be modified in a Server Action or Route Handler")
+  );
+}
+
+/**
+ * Authenticated fetch that returns the raw `Response` (PDF bytes, etc.).
+ *
+ * `apiFetch` always JSON-parses; compiled resumes are `application/pdf`.
+ */
+export async function apiFetchBinary(path: string, options: RequestOptions = {}): Promise<Response> {
+  const {
+    method = "GET",
+    body,
+    query,
+    cache,
+    tags,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    authenticated = true,
+  } = options;
+
+  const headers: Record<string, string> = { Accept: "application/pdf, application/json" };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+
+  if (authenticated) {
+    const token = await readAccessToken();
+    if (!token) throw new UnauthorizedError("no access token in session");
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path, query), {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: cache ?? "no-store",
+      ...(tags && tags.length > 0 ? { next: { tags } } : {}),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new ApiTimeoutError(timeoutMs);
+    }
+    throw error;
+  }
+
+  if (response.ok) return response;
+
+  const text = await response.text();
+  const payload: unknown = text.length > 0 ? safeJsonParse(text) : null;
+  if (response.status === 401) {
+    throw new UnauthorizedError(detailFrom(payload, "not authenticated"));
+  }
+  throw new ApiError(
+    response.status,
+    detailFrom(payload, response.statusText || "request failed"),
+    parseFieldErrors(payload),
+  );
 }
 
 /**

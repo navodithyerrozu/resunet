@@ -110,6 +110,10 @@ services:
       dockerfile: infra/docker/web.Dockerfile
     env_file: .env
     environment:
+      # Server Components and route handlers fetch FastAPI from inside the
+      # compose network. localhost:8000 is the host's published port, not
+      # reachable as "localhost" from the web container.
+      API_BASE_URL: http://api:8000
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
     ports:
       - "3000:3000"

@@ -14,9 +14,11 @@ from __future__ import annotations
 
 from datetime import date
 
+from bson import ObjectId
 from fastapi import APIRouter, status
 
 from app.api.deps import CurrentUser
+from app.db.mongo import Collections, collection
 from app.models.profile import (
     CareerProfile,
     ContactBlock,
@@ -24,6 +26,7 @@ from app.models.profile import (
     EducationEntry,
     ExperienceEntry,
     Skill,
+    SkillCount,
     SkillProficiency,
 )
 
@@ -72,6 +75,37 @@ def _mock_profile(user_id: str) -> CareerProfile:
         ],
         completeness=0.72,
     )
+
+
+@router.get(
+    "/skills",
+    response_model=list[SkillCount],
+    summary="Skills evidenced by XYZ-compliant bullets",
+)
+async def list_evidenced_skills(user: CurrentUser) -> list[SkillCount]:
+    """Aggregate skill names across every compliant bullet the caller owns.
+
+    Only bullets with `violations: []` count: a skill listed on a bullet that
+    failed XYZ has not been evidenced. Sort is count desc, then name asc, so
+    the dashboard pile is stable across refreshes.
+    """
+    user_oid = ObjectId(str(user.id))
+    pipeline: list[dict[str, object]] = [
+        {"$match": {"user_id": user_oid, "violations": {"$size": 0}}},
+        {"$unwind": "$skills"},
+        {
+            "$project": {
+                "name": {"$trim": {"input": {"$toString": "$skills"}}},
+            }
+        },
+        {"$match": {"name": {"$ne": ""}}},
+        {"$group": {"_id": "$name", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1, "_id": 1}},
+        {"$project": {"_id": 0, "name": "$_id", "count": 1}},
+    ]
+    cursor = collection(Collections.BULLETS).aggregate(pipeline)
+    rows = await cursor.to_list(length=500)
+    return [SkillCount.model_validate(row) for row in rows]
 
 
 @router.get("", response_model=CareerProfile, summary="Get the career profile")

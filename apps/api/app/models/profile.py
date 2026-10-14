@@ -20,7 +20,7 @@ from enum import StrEnum
 from bson import ObjectId
 from pydantic import Field, HttpUrl, model_validator
 
-from app.models.base import AppModel, MongoModel, PyObjectId
+from app.models.base import ApiModel, AppModel, MongoModel, PyObjectId
 
 
 def _new_entry_id() -> str:
@@ -105,6 +105,13 @@ class EducationEntry(AppModel):
     gpa: float | None = Field(default=None, ge=0, le=10)
     honors: list[str] = Field(default_factory=list)
     coursework: list[str] = Field(default_factory=list, max_length=20)
+
+
+class SkillCount(ApiModel):
+    """One evidenced skill and how many XYZ-compliant bullets carry it."""
+
+    name: str = Field(min_length=1, max_length=80)
+    count: int = Field(ge=0)
 
 
 class Skill(AppModel):

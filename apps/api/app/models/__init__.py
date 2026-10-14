@@ -82,6 +82,7 @@ from app.models.profile import (
     ExperienceEntry,
     ProjectEntry,
     Skill,
+    SkillCount,
     SkillProficiency,
 )
 from app.models.resume import (
@@ -120,7 +121,8 @@ __all__ = [
     "UserRole", "UserStatus",
     # profile
     "CareerProfile", "Certification", "ContactBlock", "DateRange", "EducationEntry",
-    "EmploymentType", "ExperienceEntry", "ProjectEntry", "Skill", "SkillProficiency",
+    "EmploymentType", "ExperienceEntry", "ProjectEntry", "Skill", "SkillCount",
+    "SkillProficiency",
     # bullet
     "Bullet", "BulletDraft", "BulletSource", "BulletStatus", "XYZViolation",
     "XYZViolationCode",

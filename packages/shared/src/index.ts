@@ -55,9 +55,15 @@ export type GenerateTurnRequest = Schemas["GenerateTurnRequest"];
 export type GenerateTurnResponse = Schemas["GenerateTurnResponse"];
 
 export type TokenPair = Schemas["TokenPair"];
+export type UserCreate = Schemas["UserCreate"];
 export type UserLogin = Schemas["UserLogin"];
 export type UserPublic = Schemas["UserPublic"];
 export type ErrorBody = Schemas["ErrorBody"];
+export type ResumeVersion = Schemas["ResumeVersion"];
+export type SkillCount = Schemas["SkillCount"];
+export type FieldMapping = Schemas["FieldMapping"];
+export type ScoreDimension = Schemas["ScoreDimension"];
+export type FindingSeverity = Schemas["FindingSeverity"];
 
 // ---------------------------------------------------------------------------
 // Enum unions
@@ -121,6 +127,7 @@ export const APPLICATION_STAGES: Record<
   failed: { rank: 3, label: "Failed", terminal: false, needsUser: true },
   rejected: { rank: 8, label: "Rejected", terminal: true, needsUser: false },
   withdrawn: { rank: 8, label: "Withdrawn", terminal: true, needsUser: false },
+  ghosted: { rank: 8, label: "Ghosted", terminal: true, needsUser: false },
 };
 
 /** The ordered rail shown in the tracker. Excludes off-path and terminal states. */

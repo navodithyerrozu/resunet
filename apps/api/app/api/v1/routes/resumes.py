@@ -20,9 +20,16 @@ Two things worth reading before extending this module:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+from pathlib import Path
 
-from app.api.deps import CurrentUser, PaginationParams
+from bson import ObjectId
+from fastapi import APIRouter, Query, status
+from fastapi.responses import FileResponse
+
+from app.api.deps import CurrentUser, PaginationParams, fetch_owned
+from app.core.config import get_settings
+from app.core.errors import NotFoundError
+from app.db.mongo import Collections, collection
 from app.models.agent import (
     BulletProposal,
     GenerateStartRequest,
@@ -308,6 +315,7 @@ async def render_resume(
     docker-compose.
     """
     return RenderJob(
+        id=_MOCK_ID,
         user_id=str(user.id or _MOCK_ID),
         resume_id=resume_id,
         version_id=_MOCK_ID,
@@ -371,4 +379,89 @@ async def get_render_job(job_id: str, user: CurrentUser) -> RenderJob:
         status=RenderJobStatus.SUCCEEDED,
         duration_ms=2840,
         finished_at=utcnow(),
+    )
+
+
+def _resolve_pdf_file(pdf_path: str) -> Path:
+    """Resolve a stored `pdf_path` under RENDER_STORAGE_DIR, refusing traversal."""
+    root = get_settings().render_storage_dir.resolve()
+    raw = Path(pdf_path)
+    candidate = raw.resolve() if raw.is_absolute() else (root / pdf_path).resolve()
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        raise NotFoundError("Rendered PDF is not available.")
+    return candidate
+
+
+async def _owned_version_with_pdf(
+    *,
+    user: CurrentUser,
+    resume_id: str,
+    version_id: str | None = None,
+    version_number: int | None = None,
+) -> dict[str, object]:
+    await fetch_owned(Collections.RESUMES, resume_id, user)
+    query: dict[str, object] = {
+        "resume_id": ObjectId(resume_id),
+        "user_id": ObjectId(str(user.id)),
+        "pdf_path": {"$nin": [None, ""]},
+    }
+    if version_id is not None:
+        if not ObjectId.is_valid(version_id):
+            raise NotFoundError()
+        query["_id"] = ObjectId(version_id)
+    if version_number is not None:
+        query["version"] = version_number
+    doc = await collection(Collections.RESUME_VERSIONS).find_one(
+        query,
+        sort=[("version", -1)],
+    )
+    if doc is None:
+        raise NotFoundError("No rendered PDF for this resume.")
+    return doc
+
+
+@router.get(
+    "/{resume_id}/pdf",
+    summary="Stream the compiled PDF for the current (or requested) version",
+    response_class=FileResponse,
+)
+async def stream_resume_pdf(
+    resume_id: str,
+    user: CurrentUser,
+    v: int | None = Query(default=None, ge=1, description="Version number to stream."),
+) -> FileResponse:
+    """Ownership-checked PDF bytes for the Next.js same-origin iframe proxy."""
+    doc = await _owned_version_with_pdf(
+        user=user, resume_id=resume_id, version_number=v,
+    )
+    pdf_path = doc.get("pdf_path")
+    if not isinstance(pdf_path, str):
+        raise NotFoundError("Rendered PDF is not available.")
+    path = _resolve_pdf_file(pdf_path)
+    return FileResponse(
+        path=path,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline"},
+    )
+
+
+@router.get(
+    "/{resume_id}/versions/{version_id}/pdf",
+    summary="Stream the compiled PDF for a specific version",
+    response_class=FileResponse,
+)
+async def stream_version_pdf(
+    resume_id: str, version_id: str, user: CurrentUser
+) -> FileResponse:
+    doc = await _owned_version_with_pdf(
+        user=user, resume_id=resume_id, version_id=version_id,
+    )
+    pdf_path = doc.get("pdf_path")
+    if not isinstance(pdf_path, str):
+        raise NotFoundError("Rendered PDF is not available.")
+    path = _resolve_pdf_file(pdf_path)
+    return FileResponse(
+        path=path,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline"},
     )

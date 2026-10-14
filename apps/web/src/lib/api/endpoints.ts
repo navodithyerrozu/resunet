@@ -1,6 +1,6 @@
 import "server-only";
 
-import { apiFetch } from "./client";
+import { apiFetch, apiFetchBinary } from "./client";
 
 import type {
   ATSScore,
@@ -18,8 +18,11 @@ import type {
   ResumeCreate,
   ResumeSummary,
   ResumeUpdate,
+  ResumeVersion,
   ScoreRequest,
+  SkillCount,
   TokenPair,
+  UserCreate,
   UserLogin,
   UserPublic,
 } from "@resunet/shared";
@@ -43,6 +46,14 @@ import type {
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
+
+export function registerAccount(payload: UserCreate): Promise<TokenPair> {
+  return apiFetch<TokenPair>("/auth/register", {
+    method: "POST",
+    body: payload,
+    authenticated: false,
+  });
+}
 
 /** Exchange credentials for a token pair. Sends no bearer token by design. */
 export function login(credentials: UserLogin): Promise<TokenPair> {
@@ -121,6 +132,25 @@ export function requestRender(resumeId: string, payload: RenderRequest = {}): Pr
 
 export function getRenderJob(jobId: string): Promise<RenderJob> {
   return apiFetch<RenderJob>(`/resumes/render-jobs/${encodeURIComponent(jobId)}`);
+}
+
+export function listResumeVersions(
+  resumeId: string,
+  params: { limit?: number; offset?: number } = {},
+): Promise<Page<ResumeVersion>> {
+  return apiFetch<Page<ResumeVersion>>(
+    `/resumes/${encodeURIComponent(resumeId)}/versions`,
+    {
+      query: { limit: params.limit ?? 20, offset: params.offset ?? 0 },
+      tags: [`resume:${resumeId}`],
+    },
+  );
+}
+
+export function streamResumePdf(resumeId: string, version?: number): Promise<Response> {
+  return apiFetchBinary(`/resumes/${encodeURIComponent(resumeId)}/pdf`, {
+    query: { v: version },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -221,4 +251,8 @@ export function listJobs(
 
 export function topRecommendations(): Promise<JobSummary[]> {
   return apiFetch<JobSummary[]>("/jobs/recommendations/top", { tags: ["jobs"] });
+}
+
+export function listProfileSkills(): Promise<SkillCount[]> {
+  return apiFetch<SkillCount[]>("/profile/skills", { tags: ["profile"] });
 }

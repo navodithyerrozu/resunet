@@ -32,6 +32,7 @@ const STATUS_TONE: Record<ApplicationStatus, ChipTone> = {
   failed: "danger",
   rejected: "neutral",
   withdrawn: "neutral",
+  ghosted: "neutral",
 };
 
 export function StatusChip({ status }: { status: ApplicationStatus }) {

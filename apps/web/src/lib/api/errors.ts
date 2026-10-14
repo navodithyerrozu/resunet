@@ -64,7 +64,24 @@ export class ApiTimeoutError extends Error {
  */
 export function parseFieldErrors(body: unknown): Record<string, string> | undefined {
   if (typeof body !== "object" || body === null) return undefined;
-  const detail = (body as { detail?: unknown }).detail;
+
+  const envelope = body as {
+    detail?: unknown;
+    error?: { details?: unknown };
+  };
+
+  const candidates: unknown[] = [envelope.detail, envelope.error?.details];
+  for (const candidate of candidates) {
+    const fromList = fieldErrorsFromValidationList(candidate);
+    if (fromList !== undefined) return fromList;
+    const fromRecord = fieldErrorsFromRecord(candidate);
+    if (fromRecord !== undefined) return fromRecord;
+  }
+
+  return undefined;
+}
+
+function fieldErrorsFromValidationList(detail: unknown): Record<string, string> | undefined {
   if (!Array.isArray(detail)) return undefined;
 
   const out: Record<string, string> = {};
@@ -78,13 +95,35 @@ export function parseFieldErrors(body: unknown): Record<string, string> | undefi
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function fieldErrorsFromRecord(details: unknown): Record<string, string> | undefined {
+  if (typeof details !== "object" || details === null || Array.isArray(details)) return undefined;
+
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(details)) {
+    if (typeof value === "string" && value.length > 0) {
+      out[key] = value;
+    } else if (Array.isArray(value) && typeof value[0] === "string") {
+      out[key] = value[0];
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Extract a human-readable message from an arbitrary error body. */
 export function detailFrom(body: unknown, fallback: string): string {
   if (typeof body === "object" && body !== null) {
-    const detail = (body as { detail?: unknown }).detail;
-    if (typeof detail === "string") return detail;
+    const envelope = body as {
+      detail?: unknown;
+      error?: { message?: unknown };
+    };
+
+    const nested = envelope.error?.message;
+    if (typeof nested === "string" && nested.length > 0) return nested;
+
+    const detail = envelope.detail;
+    if (typeof detail === "string" && detail.length > 0) return detail;
     if (Array.isArray(detail) && detail.length > 0) {
-      const first = detail[0] as { msg?: unknown };
+      const first = detail[0] as { msg?: unknown } | undefined;
       if (typeof first?.msg === "string") return first.msg;
     }
   }
