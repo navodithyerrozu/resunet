@@ -1,7 +1,5 @@
 """Career profile routes: the master record the resume agent draws from.
 
-STUB: mock data plus TODOs.
-
 The `raw_notes` field on each experience entry is the highest-leverage thing
 in this module. It is where the user dumps unstructured recollection ("rebuilt
 the retry logic, think it cut failures a lot, used Redis"), and it is the
@@ -12,69 +10,99 @@ metric the user never mentioned.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
+from enum import Enum
+from typing import Any
 
 from bson import ObjectId
 from fastapi import APIRouter, status
+from pymongo import ReturnDocument
 
 from app.api.deps import CurrentUser
+from app.core.errors import NotFoundError
+from app.core.logging import get_logger
 from app.db.mongo import Collections, collection
-from app.models.profile import (
-    CareerProfile,
-    ContactBlock,
-    DateRange,
-    EducationEntry,
-    ExperienceEntry,
-    Skill,
-    SkillCount,
-    SkillProficiency,
-)
+from app.models.base import utcnow
+from app.models.bullet import BulletStatus
+from app.models.profile import CareerProfile, ExperienceEntry, SkillCount
+from app.models.user import User
 
 router = APIRouter(prefix="/profile", tags=["profile"])
+logger = get_logger(__name__)
 
-_MOCK_ID = "000000000000000000000000"
+
+def _user_oid(user: User) -> ObjectId:
+    return ObjectId(str(user.id))
 
 
-def _mock_profile(user_id: str) -> CareerProfile:
-    return CareerProfile(
-        id=_MOCK_ID,
-        user_id=user_id,
-        contact=ContactBlock(
-            full_name="Ada Lovelace",
-            email="ada@example.com",
-            location="London, UK",
-        ),
-        headline="Backend engineer, distributed systems and payments",
-        experiences=[
-            ExperienceEntry(
-                company="Acme Corp",
-                title="Senior Backend Engineer",
-                location="Remote",
-                dates=DateRange(start=date(2023, 1, 1)),
-                tech_stack=["Python", "FastAPI", "MongoDB", "Redis", "AWS"],
-                raw_notes=(
-                    "Rebuilt the payment retry logic - failures dropped a lot. "
-                    "Used Redis for the job queue and added idempotency keys. "
-                    "Also led the migration off the old monolith."
-                ),
-            )
-        ],
-        education=[
-            EducationEntry(
-                institution="University of London",
-                degree="BSc",
-                field_of_study="Computer Science",
-                dates=DateRange(start=date(2016, 9, 1), end=date(2020, 6, 1)),
-            )
-        ],
-        skills=[
-            Skill(name="Python", category="Languages",
-                  proficiency=SkillProficiency.EXPERT, years=7),
-            Skill(name="MongoDB", category="Databases",
-                  proficiency=SkillProficiency.ADVANCED, years=4),
-        ],
-        completeness=0.72,
+def _owner_filter(user: User) -> dict[str, object]:
+    """Match this user's profile whether `user_id` was stored as ObjectId or str.
+
+    Registration writes ObjectId. Ownership is the query filter, not a check
+    after the fetch, so another user's document cannot be loaded by accident.
+    """
+    oid = _user_oid(user)
+    return {"user_id": {"$in": [oid, str(oid)]}}
+
+
+def _bson_safe(value: Any) -> Any:
+    """Make a Pydantic dump legal for Motor (dates, enums, HttpUrl)."""
+    if value is None or isinstance(value, (str, int, float, bool, bytes, ObjectId, datetime)):
+        return value
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return datetime(value.year, value.month, value.day, tzinfo=UTC)
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {key: _bson_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_bson_safe(item) for item in value]
+    return str(value)
+
+
+def profile_to_mongo(profile: CareerProfile) -> dict[str, Any]:
+    """Persist a profile with BSON ObjectIds on `_id` and `user_id`."""
+    doc = _bson_safe(profile.model_dump(by_alias=True, exclude_none=True))
+    doc["user_id"] = ObjectId(str(profile.user_id))
+    if profile.id:
+        doc["_id"] = ObjectId(str(profile.id))
+    else:
+        doc.pop("_id", None)
+    return doc
+
+
+async def load_owned_profile(user: User) -> CareerProfile:
+    """Load the caller's career profile, or 404.
+
+    A missing document after registration is a data-integrity bug, not an
+    empty state -- we log it and refuse to invent a blank profile.
+    """
+    doc = await collection(Collections.CAREER_PROFILES).find_one(_owner_filter(user))
+    if doc is None:
+        logger.error("profile.missing", user_id=str(user.id))
+        raise NotFoundError("Career profile not found.")
+    return CareerProfile.model_validate(doc)
+
+
+async def archive_bullets_for_entry(user: User, entry_id: str) -> int:
+    """Mark bullets for a removed experience/project as archived.
+
+    Never delete: a submitted resume version may still point at these rows.
+    Matching both ObjectId and string covers mixed historical storage.
+    """
+    user_oid = _user_oid(user)
+    entry_values: list[object] = [entry_id]
+    if ObjectId.is_valid(entry_id):
+        entry_values.append(ObjectId(entry_id))
+
+    result = await collection(Collections.BULLETS).update_many(
+        {
+            "user_id": {"$in": [user_oid, str(user_oid)]},
+            "profile_entry_id": {"$in": entry_values},
+        },
+        {"$set": {"status": BulletStatus.ARCHIVED.value, "updated_at": utcnow()}},
     )
+    return int(result.modified_count)
 
 
 @router.get(
@@ -89,9 +117,14 @@ async def list_evidenced_skills(user: CurrentUser) -> list[SkillCount]:
     failed XYZ has not been evidenced. Sort is count desc, then name asc, so
     the dashboard pile is stable across refreshes.
     """
-    user_oid = ObjectId(str(user.id))
+    user_oid = _user_oid(user)
     pipeline: list[dict[str, object]] = [
-        {"$match": {"user_id": user_oid, "violations": {"$size": 0}}},
+        {
+            "$match": {
+                "user_id": {"$in": [user_oid, str(user_oid)]},
+                "violations": {"$size": 0},
+            }
+        },
         {"$unwind": "$skills"},
         {
             "$project": {
@@ -110,29 +143,43 @@ async def list_evidenced_skills(user: CurrentUser) -> list[SkillCount]:
 
 @router.get("", response_model=CareerProfile, summary="Get the career profile")
 async def get_profile(user: CurrentUser) -> CareerProfile:
-    """Fetch the caller's profile.
-
-    TODO: `career_profiles` has a unique index on user_id, so this is a
-    single-document `find_one`. The profile is created at registration, so a
-    missing document is a data-integrity bug, not a normal empty state --
-    log it rather than quietly returning a blank profile.
-    """
-    return _mock_profile(str(user.id or _MOCK_ID))
+    """Fetch the authenticated user's profile. Never another user's."""
+    return await load_owned_profile(user)
 
 
 @router.put("", response_model=CareerProfile, summary="Replace the career profile")
 async def replace_profile(payload: CareerProfile, user: CurrentUser) -> CareerProfile:
-    """Full replace.
+    """Replace the caller's profile content.
 
-    TODO: preserve existing `entry_id` values for entries the client sends
-    back. If entry ids are regenerated on save, every bullet's
-    `profile_entry_id` is orphaned and the user silently loses their bullets --
-    the single worst failure mode in this endpoint. Match on incoming
-    `entry_id` and only mint new ones for genuinely new entries.
-
-    Recompute `completeness` on write, not on read.
+    Identity fields on the payload (`user_id`, `_id`, timestamps, completeness)
+    are ignored. Completeness is recomputed here. Entry ids the client sends
+    back are kept so bullets stay attached.
     """
-    return payload
+    existing = await load_owned_profile(user)
+
+    incoming = payload.model_copy(
+        update={
+            "id": existing.id,
+            "user_id": str(user.id),
+            "created_at": existing.created_at,
+            "updated_at": utcnow(),
+        }
+    ).with_preserved_entry_ids()
+    incoming.completeness = incoming.compute_completeness()
+
+    removed_ids = existing.bullet_parent_ids() - incoming.bullet_parent_ids()
+    for entry_id in removed_ids:
+        await archive_bullets_for_entry(user, entry_id)
+
+    replaced = await collection(Collections.CAREER_PROFILES).find_one_and_replace(
+        _owner_filter(user),
+        profile_to_mongo(incoming),
+        return_document=ReturnDocument.AFTER,
+    )
+    if replaced is None:
+        logger.error("profile.missing_on_replace", user_id=str(user.id))
+        raise NotFoundError("Career profile not found.")
+    return CareerProfile.model_validate(replaced)
 
 
 @router.post(
@@ -142,13 +189,29 @@ async def replace_profile(payload: CareerProfile, user: CurrentUser) -> CareerPr
     summary="Add an experience entry",
 )
 async def add_experience(payload: ExperienceEntry, user: CurrentUser) -> ExperienceEntry:
-    """Append one experience entry.
+    """Append one experience with `$push` so a parallel edit of another field is safe."""
+    existing = await load_owned_profile(user)
 
-    TODO: `$push` onto `experiences`. A targeted push rather than a full
-    document replace, so two browser tabs editing different entries do not
-    clobber each other.
-    """
-    return payload
+    entry = payload
+    if existing.find_entry(entry.entry_id) is not None:
+        entry = entry.model_copy(update={"entry_id": str(ObjectId())})
+
+    updated = existing.model_copy(update={"experiences": [*existing.experiences, entry]})
+    completeness = updated.compute_completeness()
+    now = utcnow()
+
+    result = await collection(Collections.CAREER_PROFILES).find_one_and_update(
+        _owner_filter(user),
+        {
+            "$push": {"experiences": _bson_safe(entry.model_dump(exclude_none=True))},
+            "$set": {"completeness": completeness, "updated_at": now},
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    if result is None:
+        logger.error("profile.missing_on_experience_add", user_id=str(user.id))
+        raise NotFoundError("Career profile not found.")
+    return entry
 
 
 @router.delete(
@@ -157,11 +220,23 @@ async def add_experience(payload: ExperienceEntry, user: CurrentUser) -> Experie
     summary="Remove an experience entry",
 )
 async def delete_experience(entry_id: str, user: CurrentUser) -> None:
-    """Remove an entry and archive its bullets.
+    """Pull one experience and archive (do not delete) its bullets."""
+    existing = await load_owned_profile(user)
+    if not any(item.entry_id == entry_id for item in existing.experiences):
+        raise NotFoundError()
 
-    TODO: `$pull` the entry, then set its bullets to ARCHIVED rather than
-    deleting them. Those bullets may already appear in submitted resume
-    versions; deleting them breaks nothing immediately but makes the version
-    history unexplainable.
-    """
+    remaining = [item for item in existing.experiences if item.entry_id != entry_id]
+    completeness = existing.model_copy(update={"experiences": remaining}).compute_completeness()
+
+    result = await collection(Collections.CAREER_PROFILES).update_one(
+        _owner_filter(user),
+        {
+            "$pull": {"experiences": {"entry_id": entry_id}},
+            "$set": {"completeness": completeness, "updated_at": utcnow()},
+        },
+    )
+    if result.matched_count == 0:
+        raise NotFoundError()
+
+    await archive_bullets_for_entry(user, entry_id)
     return None

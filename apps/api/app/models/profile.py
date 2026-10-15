@@ -16,11 +16,19 @@ from __future__ import annotations
 
 from datetime import date
 from enum import StrEnum
+from typing import TypeVar
 
 from bson import ObjectId
 from pydantic import Field, HttpUrl, model_validator
 
 from app.models.base import ApiModel, AppModel, MongoModel, PyObjectId
+
+_EntryT = TypeVar("_EntryT", bound=AppModel)
+
+# Equal-weight onboarding checklist. Projects and certifications are optional
+# extras and do not move the bar -- a complete first job + education + skills
+# should already show a full progress meter.
+_COMPLETENESS_NOTE_MIN_CHARS = 20
 
 
 def _new_entry_id() -> str:
@@ -177,3 +185,71 @@ class CareerProfile(MongoModel):
             if entry.entry_id == entry_id:
                 return entry
         return None
+
+    def bullet_parent_ids(self) -> set[str]:
+        """Experience and project ids that bullets may legally reference."""
+        return {entry.entry_id for entry in (*self.experiences, *self.projects)}
+
+    def compute_completeness(self) -> float:
+        """Onboarding progress in [0, 1]. Always derived server-side.
+
+        Seven equally weighted checks:
+
+        1. Contact identity (name + email) -- set at registration.
+        2. Reachability (phone, location, or LinkedIn).
+        3. Positioning (headline or summary).
+        4. At least one job.
+        5. At least one job with usable ``raw_notes`` (the agent's source text).
+        6. At least one education entry.
+        7. At least one skill.
+        """
+        checks = (
+            bool(self.contact.full_name.strip() and self.contact.email.strip()),
+            bool(
+                (self.contact.phone or "").strip()
+                or (self.contact.location or "").strip()
+                or self.contact.linkedin_url
+            ),
+            bool((self.headline or "").strip() or (self.summary or "").strip()),
+            bool(self.experiences),
+            any(
+                len(entry.raw_notes.strip()) >= _COMPLETENESS_NOTE_MIN_CHARS
+                for entry in self.experiences
+            ),
+            bool(self.education),
+            bool(self.skills),
+        )
+        return round(sum(1 for passed in checks if passed) / len(checks), 4)
+
+    def with_preserved_entry_ids(self) -> CareerProfile:
+        """Keep ids the client sent back; mint only for new or duplicate rows.
+
+        Regenerating ids on save would orphan ``Bullet.profile_entry_id``.
+        """
+        return self.model_copy(
+            update={
+                "experiences": _keep_stable_entry_ids(self.experiences),
+                "projects": _keep_stable_entry_ids(self.projects),
+                "education": _keep_stable_entry_ids(self.education),
+                "certifications": _keep_stable_entry_ids(self.certifications),
+            }
+        )
+
+
+def _keep_stable_entry_ids(incoming: list[_EntryT]) -> list[_EntryT]:
+    """Keep client-supplied ids; mint only when missing or duplicated in this list.
+
+    Existing rows stay stable because the client sends their original ``entry_id``
+    back on PUT. A second row that reuses the same id gets a fresh ObjectId so
+    two experiences cannot share a bullet parent.
+    """
+    seen: set[str] = set()
+    out: list[_EntryT] = []
+    for item in incoming:
+        entry_id = getattr(item, "entry_id", "")
+        if not isinstance(entry_id, str) or not entry_id or entry_id in seen:
+            item = item.model_copy(update={"entry_id": _new_entry_id()})
+            entry_id = getattr(item, "entry_id")
+        seen.add(entry_id)
+        out.append(item)
+    return out
