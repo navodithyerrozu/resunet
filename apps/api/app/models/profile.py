@@ -14,16 +14,24 @@ rearranges their history.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from enum import StrEnum
-from typing import TypeVar
+from typing import Any, Protocol, Self
 
 from bson import ObjectId
 from pydantic import Field, HttpUrl, model_validator
 
 from app.models.base import ApiModel, AppModel, MongoModel, PyObjectId
 
-_EntryT = TypeVar("_EntryT", bound=AppModel)
+
+class _EntryWithId(Protocol):
+    entry_id: str
+
+    def model_copy(
+        self, *, update: Mapping[str, Any] | None = None, deep: bool = False
+    ) -> Self: ...
+
 
 # Equal-weight onboarding checklist. Projects and certifications are optional
 # extras and do not move the bar -- a complete first job + education + skills
@@ -181,14 +189,19 @@ class CareerProfile(MongoModel):
 
     def find_entry(self, entry_id: str) -> ExperienceEntry | ProjectEntry | None:
         """Resolve a bullet's parent entry across both bullet-bearing lists."""
-        for entry in (*self.experiences, *self.projects):
-            if entry.entry_id == entry_id:
-                return entry
+        for experience in self.experiences:
+            if experience.entry_id == entry_id:
+                return experience
+        for project in self.projects:
+            if project.entry_id == entry_id:
+                return project
         return None
 
     def bullet_parent_ids(self) -> set[str]:
         """Experience and project ids that bullets may legally reference."""
-        return {entry.entry_id for entry in (*self.experiences, *self.projects)}
+        return {entry.entry_id for entry in self.experiences} | {
+            entry.entry_id for entry in self.projects
+        }
 
     def compute_completeness(self) -> float:
         """Onboarding progress in [0, 1]. Always derived server-side.
@@ -236,7 +249,7 @@ class CareerProfile(MongoModel):
         )
 
 
-def _keep_stable_entry_ids(incoming: list[_EntryT]) -> list[_EntryT]:
+def _keep_stable_entry_ids[T: _EntryWithId](incoming: list[T]) -> list[T]:
     """Keep client-supplied ids; mint only when missing or duplicated in this list.
 
     Existing rows stay stable because the client sends their original ``entry_id``
@@ -244,12 +257,12 @@ def _keep_stable_entry_ids(incoming: list[_EntryT]) -> list[_EntryT]:
     two experiences cannot share a bullet parent.
     """
     seen: set[str] = set()
-    out: list[_EntryT] = []
+    out: list[T] = []
     for item in incoming:
-        entry_id = getattr(item, "entry_id", "")
+        entry_id = item.entry_id
         if not isinstance(entry_id, str) or not entry_id or entry_id in seen:
             item = item.model_copy(update={"entry_id": _new_entry_id()})
-            entry_id = getattr(item, "entry_id")
+            entry_id = item.entry_id
         seen.add(entry_id)
         out.append(item)
     return out

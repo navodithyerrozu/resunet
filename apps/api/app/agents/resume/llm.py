@@ -34,7 +34,7 @@ def get_chat_model(*, temperature: float | None = None) -> ChatAnthropic:
             "ANTHROPIC_API_KEY is not configured; the resume agent cannot run."
         )
     return ChatAnthropic(
-        model_name=settings.resume_agent_model,
+        model=settings.resume_agent_model,
         temperature=(
             settings.resume_agent_temperature if temperature is None else temperature
         ),

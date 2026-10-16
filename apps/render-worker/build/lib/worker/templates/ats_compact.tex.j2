@@ -1,0 +1,21 @@
+<# Density-optimised variant for candidates with enough experience to overflow
+   two pages.
+
+   Tightening happens through margins and list spacing rather than font size.
+   Below roughly 10pt, older resume parsers that fall back to OCR on embedded
+   fonts start making character-level mistakes, and a misread digit silently
+   corrupts exactly the metrics the XYZ formula exists to surface. 10pt is the
+   floor. #>
+<% extends "_base.tex.j2" %>
+
+<% block fontsize %>10pt<% endblock %>
+<% block margintop %>0.4in<% endblock %>
+<% block marginbottom %>0.4in<% endblock %>
+<% block marginleft %>0.5in<% endblock %>
+<% block marginright %>0.5in<% endblock %>
+<% block sectionspaceabove %>-4pt<% endblock %>
+<% block sectionspacebelow %>-6pt<% endblock %>
+<% block bulletindent %>0.15in<% endblock %>
+<% block bullettopsep %>1pt<% endblock %>
+<% block bulletitemsep %>0pt<% endblock %>
+<% block bulletbottomsep %>-4pt<% endblock %>

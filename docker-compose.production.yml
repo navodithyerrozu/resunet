@@ -1,0 +1,77 @@
+# Production application services. MongoDB and Redis are supplied by the
+# deployment environment; they are intentionally not started as local containers.
+name: resunet-production
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api.production.Dockerfile
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI to the production replica set}
+      MONGODB_DB: ${MONGODB_DB:-resunet}
+      REDIS_URI: ${REDIS_URI:?Set REDIS_URI to the production Redis service}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set a unique production JWT_SECRET_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to the public web origin}
+      RENDER_STORAGE_DIR: /srv/storage/renders
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CREDENTIAL_ENCRYPTION_KEY: ""
+    volumes:
+      - render_storage:/srv/storage/renders
+
+  render-worker:
+    build:
+      context: .
+      dockerfile: infra/docker/render-worker.Dockerfile
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI to the production replica set}
+      MONGODB_DB: ${MONGODB_DB:-resunet}
+      REDIS_URI: ${REDIS_URI:?Set REDIS_URI to the production Redis service}
+      RENDER_STORAGE_DIR: /srv/storage/renders
+      RENDER_MAX_TRIES: ${RENDER_MAX_TRIES:-2}
+      RENDER_RETRY_DELAY_SECONDS: ${RENDER_RETRY_DELAY_SECONDS:-10}
+    volumes:
+      - render_storage:/srv/storage/renders
+
+  automation-worker:
+    build:
+      context: .
+      dockerfile: infra/docker/automation-worker.Dockerfile
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI to the production replica set}
+      MONGODB_DB: ${MONGODB_DB:-resunet}
+      REDIS_URI: ${REDIS_URI:?Set REDIS_URI to the production Redis service}
+      RENDER_STORAGE_DIR: /srv/storage/renders
+      TRACE_STORAGE_DIR: /srv/storage/traces
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?Set the worker credential key}
+      AUTOMATION_PROXY_URL: ${AUTOMATION_PROXY_URL:-}
+      AUTOMATION_ALLOWED_HOSTS: ${AUTOMATION_ALLOWED_HOSTS:?Set explicitly authorized workflow hostnames}
+      AUTOMATION_REQUIRE_APPROVAL: "true"
+    shm_size: 1gb
+    volumes:
+      - render_storage:/srv/storage/renders:ro
+      - automation_traces:/srv/storage/traces
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.production.Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_BASE_URL: http://api:8000
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  render_storage:
+  automation_traces:

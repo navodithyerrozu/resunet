@@ -28,7 +28,7 @@ const STATUS_TONE: Record<ResumeStatus, ChipTone> = {
 
 export default async function ResumesPage() {
   const [resumes, jobs] = await withFreshSession(() =>
-    Promise.all([listResumes({ limit: 50 }), listJobs({ limit: 20 })]),
+    Promise.all([listResumes({ limit: 50 }), listJobs({ limit: 20, status: "open" })]),
   );
 
   return (

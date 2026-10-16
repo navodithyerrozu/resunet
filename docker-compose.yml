@@ -45,12 +45,30 @@ services:
     build:
       context: .
       dockerfile: infra/docker/api.Dockerfile
-    env_file: .env
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+      MONGODB_DB: ${MONGODB_DB:-resunet}
       REDIS_URI: redis://redis:6379/0
-      # The API is deliberately NOT given the credential decryption key.
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-openssl-rand-hex-32}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-30}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      RESUME_AGENT_MODEL: ${RESUME_AGENT_MODEL:-claude-sonnet-4-5-20250929}
+      RESUME_AGENT_TEMPERATURE: ${RESUME_AGENT_TEMPERATURE:-0.2}
+      XYZ_MAX_REPAIR_ATTEMPTS: ${XYZ_MAX_REPAIR_ATTEMPTS:-3}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+      RENDER_STORAGE_DIR: /srv/storage/renders
+      LATEX_COMPILE_TIMEOUT_SECONDS: ${LATEX_COMPILE_TIMEOUT_SECONDS:-45}
+      RENDER_MAX_TRIES: ${RENDER_MAX_TRIES:-2}
+      RENDER_RETRY_DELAY_SECONDS: ${RENDER_RETRY_DELAY_SECONDS:-10}
+      AUTOMATION_MAX_ATTEMPTS: ${AUTOMATION_MAX_ATTEMPTS:-3}
+      # The API must not receive either automation secret.
       CREDENTIAL_ENCRYPTION_KEY: ""
+      AUTOMATION_PROXY_URL: ""
     ports:
       - "8000:8000"
     volumes:
@@ -68,10 +86,14 @@ services:
     build:
       context: .
       dockerfile: infra/docker/render-worker.Dockerfile
-    env_file: .env
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+      MONGODB_DB: ${MONGODB_DB:-resunet}
       REDIS_URI: redis://redis:6379/0
+      RENDER_STORAGE_DIR: /srv/storage/renders
+      LATEX_COMPILE_TIMEOUT_SECONDS: ${LATEX_COMPILE_TIMEOUT_SECONDS:-45}
     volumes:
       - ./apps/render-worker:/srv/render-worker
       - render_storage:/srv/storage/renders
@@ -86,10 +108,21 @@ services:
     build:
       context: .
       dockerfile: infra/docker/automation-worker.Dockerfile
-    env_file: .env
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+      MONGODB_DB: ${MONGODB_DB:-resunet}
       REDIS_URI: redis://redis:6379/0
+      RENDER_STORAGE_DIR: /srv/storage/renders
+      TRACE_STORAGE_DIR: /srv/storage/traces
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
+      AUTOMATION_PROXY_URL: ${AUTOMATION_PROXY_URL:-}
+      AUTOMATION_ALLOWED_HOSTS: ${AUTOMATION_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      AUTOMATION_REQUIRE_APPROVAL: ${AUTOMATION_REQUIRE_APPROVAL:-true}
+      AUTOMATION_HEADLESS: ${PLAYWRIGHT_HEADLESS:-true}
+      AUTOMATION_MAX_ATTEMPTS: ${AUTOMATION_MAX_ATTEMPTS:-3}
+      AUTOMATION_NAV_TIMEOUT_MS: ${AUTOMATION_NAV_TIMEOUT_MS:-30000}
     # Chromium needs more shared memory than Docker's 64MB default or it
     # crashes on content-heavy pages.
     shm_size: "1gb"
@@ -108,13 +141,11 @@ services:
     build:
       context: .
       dockerfile: infra/docker/web.Dockerfile
-    env_file: .env
     environment:
       # Server Components and route handlers fetch FastAPI from inside the
       # compose network. localhost:8000 is the host's published port, not
       # reachable as "localhost" from the web container.
       API_BASE_URL: http://api:8000
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
     ports:
       - "3000:3000"
     volumes:

@@ -21,7 +21,7 @@ and delete this file.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -61,6 +61,16 @@ class SectionRead(ReadModel):
     entries: list[EntryRead] = Field(default_factory=list)
 
 
+class DateRangeRead(ReadModel):
+    start: date
+    end: date | None = None
+
+    def label(self) -> str:
+        start = self.start.strftime("%b %Y")
+        end = self.end.strftime("%b %Y") if self.end else "Present"
+        return f"{start} – {end}"
+
+
 class SkillRead(ReadModel):
     name: str
     category: str | None = None
@@ -68,17 +78,33 @@ class SkillRead(ReadModel):
 
 class EducationRead(ReadModel):
     institution: str
-    degree: str
+    degree: str | None = None
     field_of_study: str | None = None
-    date_label: str | None = None
-    gpa: str | None = None
+    dates: DateRangeRead | None = None
+    gpa: float | None = None
     location: str | None = None
+
+    @property
+    def date_label(self) -> str | None:
+        return self.dates.label() if self.dates else None
 
 
 class CertificationRead(ReadModel):
     name: str
     issuer: str | None = None
-    date_label: str | None = None
+    issued_on: date | None = None
+    expires_on: date | None = None
+
+    @property
+    def date_label(self) -> str | None:
+        if self.issued_on is None:
+            return None
+        if self.expires_on is None:
+            return self.issued_on.strftime("%b %Y")
+        return (
+            f"{self.issued_on.strftime('%b %Y')} – "
+            f"{self.expires_on.strftime('%b %Y')}"
+        )
 
 
 class ResumeVersionRead(ReadModel):

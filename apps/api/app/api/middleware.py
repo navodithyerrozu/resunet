@@ -37,12 +37,15 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         start = time.perf_counter()
         try:
             response = await call_next(request)
-        except Exception:
+        except Exception as exc:
             # Logged here rather than only in the exception handler so that
             # failures inside downstream middleware are still recorded.
-            logger.exception(
+            # Exception strings and tracebacks can contain user-supplied resume
+            # text. Record a safe class and request timing, not the payload.
+            logger.error(
                 "request.unhandled_error",
                 duration_ms=round((time.perf_counter() - start) * 1000, 2),
+                error_type=type(exc).__name__,
             )
             raise
         finally:

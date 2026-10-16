@@ -127,7 +127,7 @@ async def compile_latex(
         log = ""
         for pass_number in range(1, settings.latex_passes + 1):
             returncode, output = await _run_pdflatex(
-                tex_path, workdir, timeout=settings.latex_compile_timeout_seconds
+                tex_path, workdir, limit_seconds=settings.latex_compile_timeout_seconds
             )
             log = output
             if returncode != 0:
@@ -170,7 +170,7 @@ async def compile_latex(
 
 
 async def _run_pdflatex(
-    tex_path: Path, workdir: Path, *, timeout: int
+    tex_path: Path, workdir: Path, *, limit_seconds: int
 ) -> tuple[int | None, str]:
     """One pdflatex pass. Returns (returncode, combined output)."""
     process = await asyncio.create_subprocess_exec(
@@ -192,16 +192,17 @@ async def _run_pdflatex(
     )
 
     try:
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        async with asyncio.timeout(limit_seconds):
+            stdout, _ = await process.communicate()
     except TimeoutError:
         # SIGKILL, not SIGTERM: a TeX process stuck in a macro expansion loop
         # does not service signals politely, and a lingering pdflatex holds a
         # core for as long as it survives.
         process.kill()
         await process.wait()
-        logger.error("latex.timeout", timeout_seconds=timeout)
+        logger.error("latex.timeout", timeout_seconds=limit_seconds)
         raise LatexCompileError(
-            f"pdflatex exceeded {timeout}s and was killed",
+            f"pdflatex exceeded {limit_seconds}s and was killed",
             log_tail="Compile timed out. Common causes: a recursive macro, or an "
             "unclosed environment causing TeX to scan to end of file.",
         ) from None

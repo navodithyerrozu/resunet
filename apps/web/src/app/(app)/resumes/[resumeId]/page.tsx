@@ -7,11 +7,17 @@ import { ResumeTemplateSelect, ResumeWorkspaceEditor } from "@/components/resume
 import { XyzBullet } from "@/components/resume/XyzBullet";
 import { Card, Chip, EmptyState, Meter } from "@/components/ui/primitives";
 import { withFreshSession } from "@/lib/api/client";
-import { getResume, listBullets, listResumeVersions } from "@/lib/api/endpoints";
+import {
+  getCareerProfile,
+  getGenerationSession,
+  getResume,
+  listBullets,
+  listResumeVersions,
+} from "@/lib/api/endpoints";
 import { ApiError } from "@/lib/api/errors";
 
 import type { Metadata } from "next";
-import type { Bullet, Resume, ResumeStatus, ResumeVersion } from "@resunet/shared";
+import type { Bullet, CareerProfile, GenerateTurnResponse, Resume, ResumeStatus, ResumeVersion } from "@resunet/shared";
 import type { ChipTone } from "@/components/ui/primitives";
 
 export const metadata: Metadata = { title: "Resume workspace" };
@@ -45,17 +51,26 @@ export default async function ResumeWorkspacePage({ params }: { params: Params }
   let resume: Resume;
   let bullets: { items: Bullet[] };
   let versions: { items: ResumeVersion[] };
+  let profile: CareerProfile;
+  let generation: GenerateTurnResponse | null;
   try {
     const loaded = await withFreshSession(() =>
       Promise.all([
         getResume(resumeId),
         listBullets(resumeId, { limit: 200 }),
         listResumeVersions(resumeId, { limit: 50 }),
+        getCareerProfile(),
+        getGenerationSession(resumeId).catch((error: unknown) => {
+          if (error instanceof ApiError && error.status === 404) return null;
+          throw error;
+        }),
       ]),
     );
     resume = loaded[0];
     bullets = loaded[1];
     versions = loaded[2];
+    profile = loaded[3];
+    generation = loaded[4];
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) notFound();
     throw error;
@@ -161,7 +176,27 @@ export default async function ResumeWorkspacePage({ params }: { params: Params }
             </div>
           )}
 
-          <GenerationChat resumeId={resume.id} />
+          <GenerationChat
+            resumeId={resume.id}
+            initialTurn={generation}
+            entries={[
+              ...profile.experiences.map((entry) => ({
+                id: entry.entry_id,
+                label: `${entry.title} · ${entry.company}`,
+              })),
+              ...profile.projects.map((entry) => ({
+                id: entry.entry_id,
+                label: `${entry.name}${entry.role ? ` · ${entry.role}` : ""}`,
+              })),
+            ].filter((entry) =>
+              resume.sections.some(
+                (section) =>
+                  section.visible &&
+                  (section.kind === "experience" || section.kind === "projects") &&
+                  section.entry_ids.includes(entry.id),
+              ),
+            )}
+          />
         </Card>
 
         <div className="space-y-6">

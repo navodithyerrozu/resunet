@@ -1,0 +1,194 @@
+<# ===========================================================================
+   Base resume template. The three concrete templates extend this and override
+   only typography blocks.
+
+   Every structural choice below exists to survive ATS text extraction, which
+   is a different goal from looking good. Where the two conflict, extraction
+   wins -- a beautiful resume that parses into scrambled text scores zero, and
+   the user never finds out why.
+
+   Load-bearing decisions:
+
+   * glyphtounicode + \pdfgentounicode=1. Without this, pdflatex writes glyph
+     indices with no Unicode mapping for some fonts, and text extraction
+     returns plausible-looking garbage. This single line is the difference
+     between a parseable PDF and one where copy-paste yields mojibake. It is
+     the most important two lines in this file.
+
+   * No tabular, no multicol, no minipage for layout. A parser linearizes
+     content by position; a two-column layout interleaves the columns, turning
+     "Senior Engineer / Acme Corp" into "Senior Acme Engineer Corp". Dates are
+     right-aligned with \hfill inside a normal paragraph instead, which
+     linearizes correctly.
+
+   * Real \itemize lists. Parsers recognise list structure; a bullet character
+     typed manually into a paragraph is just text.
+
+   * Standard section headings ("Experience", not "Where I've Been"). Keyword
+     matching on section titles is how parsers decide what a block of text
+     means.
+
+   * \pagestyle{empty}. Content in headers and footers is frequently dropped
+     entirely by extractors, so nothing important may live there.
+
+   Delimiters are non-standard because LaTeX owns { and %:
+       << var >>   <% stmt %>   <# comment #>
+   =========================================================================== #>
+\documentclass[<% block fontsize %>11pt<% endblock %>,letterpaper]{article}
+
+<# --- Encoding and fonts ------------------------------------------------- #>
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+<% block fontpackage %>
+\usepackage{lmodern}
+<% endblock %>
+
+<# --- Reliable text extraction. See header. ------------------------------ #>
+\input{glyphtounicode}
+\pdfgentounicode=1
+
+<# --- Geometry ----------------------------------------------------------- #>
+\usepackage[
+  top=<% block margintop %>0.55in<% endblock %>,
+  bottom=<% block marginbottom %>0.55in<% endblock %>,
+  left=<% block marginleft %>0.65in<% endblock %>,
+  right=<% block marginright %>0.65in<% endblock %>
+]{geometry}
+
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+
+<# hidelinks rather than colorlinks: a coloured box around every URL survives
+   into the extracted text as nothing useful and prints badly. #>
+\hypersetup{
+  pdftitle={<< contact.full_name >> -- Resume},
+  pdfauthor={<< contact.full_name >>},
+  pdfcreator={},
+  pdfproducer={}
+}
+
+<# Suppress ligatures. "fi" typeset as a single ligature glyph extracts as one
+   codepoint some parsers do not decompose, so "efficient" can arrive as
+   "ef cient" and the keyword match fails. #>
+\usepackage{microtype}
+\DisableLigatures[f,i,l]{encoding = *, family = *}
+
+\pagestyle{empty}
+\raggedright
+\setlength{\parindent}{0pt}
+\setlength{\tabcolsep}{0pt}
+
+<# --- Section headings --------------------------------------------------- #>
+\titleformat{\section}
+  {\vspace{<% block sectionspaceabove %>-2pt<% endblock %>}\scshape\raggedright\large}
+  {}{0em}{}[\color{black}\titlerule\vspace{<% block sectionspacebelow %>-4pt<% endblock %>}]
+\titlespacing*{\section}{0pt}{8pt}{4pt}
+
+<# A single reusable entry macro. Defined once so the three templates cannot
+   drift in how they lay out an experience block. #>
+\newcommand{\resumeEntry}[4]{%
+  \vspace{2pt}%
+  \textbf{#1}\hfill\textbf{#2}\\%
+  <# The \ifx guard keeps the line from collapsing when a subheading or
+     location is absent, which would otherwise leave a stray \\ and a blank
+     line in the middle of the entry. #>
+  \ifx&#3&\else\textit{#3}\fi\hfill\ifx&#4&\else\textit{#4}\fi%
+  \vspace{-2pt}%
+}
+
+\newcommand{\resumeBullets}[0]{}
+\newenvironment{resumeItemize}
+  {\begin{itemize}[
+      leftmargin=<% block bulletindent %>0.18in<% endblock %>,
+      topsep=<% block bullettopsep %>2pt<% endblock %>,
+      itemsep=<% block bulletitemsep %>1pt<% endblock %>,
+      parsep=0pt,
+      partopsep=0pt,
+      label={\textbullet}
+   ]}
+  {\end{itemize}\vspace{<% block bulletbottomsep %>-2pt<% endblock %>}}
+
+\begin{document}
+
+<# ===================== Header ===================== #>
+<# The name is plain text at the top of the document flow, not inside a box or
+   table. Parsers overwhelmingly take the first prominent text line as the
+   candidate name; anything more elaborate risks the name being read as a
+   heading and discarded. #>
+{\centering
+  {\LARGE\bfseries << contact.full_name >>}\\[3pt]
+  <% block contactline %>
+  << contact_parts | join_safe(" $|$ ") >>
+  <% endblock %>
+  \par
+}
+\vspace{6pt}
+
+<# ===================== Summary ===================== #>
+<% if summary %>
+\section{Summary}
+<< summary >>
+<% endif %>
+
+<# ===================== Body sections ===================== #>
+<# Rendered in the order the API stored them: section ordering is a user
+   decision (a new grad leads with Education, a senior hire with Experience),
+   so the template must not impose one. #>
+<% for section in sections %>
+\section{<< section.title >>}
+<% for entry in section.entries %>
+\resumeEntry
+  {<< entry.heading >>}
+  {<< entry.date_label or "" >>}
+  {<< entry.subheading or "" >>}
+  {<< entry.location or "" >>}
+<% if entry.bullets %>
+\begin{resumeItemize}
+<% for bullet in entry.bullets %>
+  \item << bullet.text >>
+<% endfor %>
+\end{resumeItemize}
+<% endif %>
+<% endfor %>
+<% endfor %>
+
+<# ===================== Skills ===================== #>
+<# Grouped by category and rendered as "Category: a, b, c" lines. Parsers
+   reliably split on the colon and the commas; a skills matrix in a table does
+   not survive linearization. #>
+<% if skill_groups %>
+\section{Skills}
+<% for group in skill_groups %>
+\textbf{<< group.name >>:} << group.items | join_safe(", ") >>\\
+<% endfor %>
+<% endif %>
+
+<# ===================== Education ===================== #>
+<% if education %>
+\section{Education}
+<% for edu in education %>
+\resumeEntry
+  {<< edu.institution >>}
+  {<< edu.date_label or "" >>}
+  {<< edu.degree or "" >><% if edu.field_of_study %>, << edu.field_of_study >><% endif %>}
+  {<< edu.location or "" >>}
+<% if edu.gpa %>
+\begin{resumeItemize}
+  \item GPA: << edu.gpa >>
+\end{resumeItemize}
+<% endif %>
+<% endfor %>
+<% endif %>
+
+<# ===================== Certifications ===================== #>
+<% if certifications %>
+\section{Certifications}
+\begin{resumeItemize}
+<% for cert in certifications %>
+  \item << cert.name >><% if cert.issuer %> --- << cert.issuer >><% endif %><% if cert.date_label %> (<< cert.date_label >>)<% endif %>
+<% endfor %>
+\end{resumeItemize}
+<% endif %>
+
+\end{document}

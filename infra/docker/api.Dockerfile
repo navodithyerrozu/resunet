@@ -13,16 +13,17 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /srv/api
 
-# Dependency layer first so source edits don't invalidate the pip cache.
+# Copy source before install so setuptools can discover the app package.
 COPY apps/api/pyproject.toml ./
+COPY apps/api/ ./
 RUN pip install --upgrade pip && pip install -e ".[dev]"
 
-COPY apps/api/ ./
-
 # Run as non-root.
-RUN useradd --create-home --uid 10001 appuser \
+RUN groupadd --system --gid 10003 renderdata \
+    && useradd --create-home --uid 10001 --gid renderdata appuser \
     && mkdir -p /srv/storage/renders \
-    && chown -R appuser:appuser /srv
+    && chown -R appuser:renderdata /srv \
+    && chmod 2775 /srv/storage/renders
 USER appuser
 
 EXPOSE 8000

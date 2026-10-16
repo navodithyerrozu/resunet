@@ -1,147 +1,109 @@
-"""ATS scoring routes.
-
-STUB: returns realistic mock scores. The mock is intentionally not a perfect
-100 -- it shows the two findings that matter most in practice (a missing
-required keyword and a bullet without a metric) so the frontend gets built
-against the case that actually occurs.
-"""
+"""ATS scoring routes backed by compiled-PDF scoring worker results."""
 
 from __future__ import annotations
 
+from bson import ObjectId
 from fastapi import APIRouter, Query, status
 
-from app.api.deps import CurrentUser, PaginationParams
-from app.models.ats import (
-    ATSFinding,
-    ATSScore,
-    DimensionScore,
-    FindingSeverity,
-    KeywordAnalysis,
-    ScoreComparison,
-    ScoreDimension,
-    ScoreRequest,
-)
-from app.models.base import Page, utcnow
+from app.api.deps import CurrentUser, PaginationParams, fetch_owned
+from app.core.errors import ConflictError, NotFoundError, QueueUnavailableError
+from app.db.mongo import Collections, collection
+from app.models.ats import ATSScore, ScoreComparison, ScoreRequest, ScoreSubmission
+from app.models.base import Page
+from app.services.queue import enqueue_score
 
 router = APIRouter(prefix="/ats", tags=["ats"])
 
-_MOCK_ID = "000000000000000000000000"
 
-
-def _mock_score(version_id: str, user_id: str, job_id: str | None) -> ATSScore:
-    """Representative score with the failure modes we actually see."""
-    return ATSScore(
-        id=_MOCK_ID,
-        user_id=user_id,
-        resume_version_id=version_id,
-        job_id=job_id,
-        overall=87.5,
-        dimensions=[
-            DimensionScore(
-                dimension=ScoreDimension.KEYWORD_MATCH, score=82.0, weight=0.30,
-                detail="11 of 13 required terms present.",
-            ),
-            DimensionScore(
-                dimension=ScoreDimension.PARSEABILITY, score=100.0, weight=0.25,
-                detail="Single column, no tables or text boxes; all sections recovered.",
-            ),
-            DimensionScore(
-                dimension=ScoreDimension.IMPACT_QUANTIFICATION, score=91.0, weight=0.20,
-                detail="10 of 11 bullets carry a metric.",
-            ),
-            DimensionScore(
-                dimension=ScoreDimension.SECTION_STRUCTURE, score=100.0, weight=0.10,
-                detail="Standard headings recognised.",
-            ),
-            DimensionScore(
-                dimension=ScoreDimension.LENGTH_DENSITY, score=78.0, weight=0.08,
-                detail="Single page at 92% fill -- slightly dense.",
-            ),
-            DimensionScore(
-                dimension=ScoreDimension.CONTACT_COMPLETENESS, score=85.0, weight=0.04,
-                detail="Phone number absent.",
-            ),
-            DimensionScore(
-                dimension=ScoreDimension.DATE_CONSISTENCY, score=100.0, weight=0.03,
-                detail="All ranges parse, no gaps over 6 months.",
-            ),
-        ],
-        findings=[
-            ATSFinding(
-                dimension=ScoreDimension.KEYWORD_MATCH,
-                severity=FindingSeverity.CRITICAL,
-                code="missing_required_keyword",
-                message="'Kubernetes' appears 4 times in the posting but not on the resume.",
-                suggestion="Your notes mention EKS. Surface it as 'Kubernetes (EKS)' so both "
-                "the literal term and your actual experience are matched.",
-                auto_fixable=True,
-            ),
-            ATSFinding(
-                dimension=ScoreDimension.IMPACT_QUANTIFICATION,
-                severity=FindingSeverity.WARNING,
-                code="bullet_missing_metric",
-                message="One bullet under 'Acme Corp' has no quantified outcome.",
-                suggestion="Open the generation agent on this bullet to add a metric.",
-                target_bullet_id=_MOCK_ID,
-                auto_fixable=True,
-            ),
-        ],
-        keyword_analysis=KeywordAnalysis(
-            required_present=["Python", "FastAPI", "MongoDB", "AWS", "Docker", "CI/CD",
-                              "REST", "PostgreSQL", "Redis", "Git", "Linux"],
-            required_missing=["Kubernetes", "Terraform"],
-            preferred_present=["LangChain", "Playwright"],
-            preferred_missing=["gRPC"],
-        ),
-        extraction_confidence=0.98,
-        computed_at=utcnow(),
+async def _require_job_access(
+    job_id: str, user: CurrentUser, *, version_doc: dict[str, object] | None = None
+) -> None:
+    """A shared job is visible only after the caller saved or applied to it."""
+    if not ObjectId.is_valid(job_id):
+        raise NotFoundError()
+    job_oid = ObjectId(job_id)
+    user_oid = ObjectId(str(user.id))
+    match = await collection(Collections.JOB_MATCHES).find_one(
+        {"job_id": job_oid, "user_id": user_oid}
     )
+    if match is None:
+        match = await collection(Collections.APPLICATIONS).find_one(
+            {"job_id": job_oid, "user_id": user_oid}
+        )
+    if match is None and version_doc is not None:
+        resume_id = version_doc.get("resume_id")
+        if isinstance(resume_id, ObjectId):
+            match = await collection(Collections.RESUMES).find_one(
+                {
+                    "_id": resume_id,
+                    "user_id": user_oid,
+                    "target_job_id": job_oid,
+                }
+            )
+    if match is None:
+        raise NotFoundError()
 
 
 @router.post(
     "/score",
-    response_model=ATSScore,
-    status_code=status.HTTP_200_OK,
-    summary="Score a resume version",
+    response_model=ScoreSubmission,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Queue ATS scoring for a rendered resume version",
 )
-async def score_resume(payload: ScoreRequest, user: CurrentUser) -> ATSScore:
-    """Score a rendered resume version, optionally against a specific posting.
+async def score_resume(payload: ScoreRequest, user: CurrentUser) -> ScoreSubmission:
+    """Queue scoring against the PDF artifact; results are read from score history."""
+    version_id = str(payload.resume_version_id)
+    version_doc = await fetch_owned(Collections.RESUME_VERSIONS, version_id, user)
+    if not version_doc.get("pdf_path"):
+        raise ConflictError("This resume version has not finished rendering.")
+    if payload.job_id is not None:
+        await _require_job_access(str(payload.job_id), user, version_doc=version_doc)
 
-    TODO: the critical implementation constraint -- score the text extracted
-    from the *compiled PDF*, not the resume object or the LaTeX source. Load
-    `ResumeVersion.pdf_path`, extract with pdfplumber (or pdftotext), and run
-    every dimension against that string.
-
-    Scoring the in-memory model would award a perfect parseability score to a
-    document no ATS can read, which is worse than not scoring at all: it tells
-    the user their resume is fine when it is silently broken.
-
-    If `pdf_path` is unset, return 409 -- the version has not finished
-    rendering, and there is nothing to extract.
-
-    Runs synchronously here because extraction plus scoring is ~200ms once the
-    PDF exists. If LLM-based semantic scoring is added later, move this to
-    `enqueue_score` and make it a polled job.
-    """
-    return _mock_score(payload.resume_version_id, str(user.id or _MOCK_ID), payload.job_id)
+    try:
+        arq_job_id = await enqueue_score(
+            version_id=version_id,
+            user_id=str(user.id),
+            job_id=str(payload.job_id) if payload.job_id is not None else None,
+        )
+    except Exception as exc:  # noqa: BLE001 - the request must not claim it was queued
+        raise QueueUnavailableError() from exc
+    return ScoreSubmission(resume_version_id=version_id, arq_job_id=arq_job_id)
 
 
 @router.get(
     "/scores/{version_id}",
     response_model=Page[ATSScore],
+    response_model_by_alias=False,
     summary="Score history for a version",
 )
 async def score_history(
-    version_id: str, user: CurrentUser, page: PaginationParams
+    version_id: str,
+    user: CurrentUser,
+    page: PaginationParams,
+    job_id: str | None = Query(default=None, alias="jobId"),
+    include_extracted_text: bool = Query(default=False, alias="includeExtractedText"),
 ) -> Page[ATSScore]:
-    """All scoring runs for one version, newest first.
-
-    TODO: covered by `ix_version_computed`. Exclude `extracted_text` from the
-    list projection -- it is up to 40KB per document.
-    """
+    """List persisted worker scores; large extracted text is opt-in."""
+    version_doc = await fetch_owned(Collections.RESUME_VERSIONS, version_id, user)
+    query: dict[str, object] = {
+        "resume_version_id": ObjectId(version_id),
+        "user_id": ObjectId(str(user.id)),
+    }
+    if job_id is not None:
+        await _require_job_access(job_id, user, version_doc=version_doc)
+        query["job_id"] = ObjectId(job_id)
+    scores = collection(Collections.ATS_SCORES)
+    projection = None if include_extracted_text else {"extracted_text": 0}
+    docs = await (
+        scores.find(query, projection)
+        .sort("computed_at", -1)
+        .skip(page.offset)
+        .limit(page.limit)
+        .to_list(length=page.limit)
+    )
     return Page[ATSScore](
-        items=[_mock_score(version_id, str(user.id or _MOCK_ID), None)],
-        total=1,
+        items=[ATSScore.model_validate(doc) for doc in docs],
+        total=await scores.count_documents(query),
         limit=page.limit,
         offset=page.offset,
     )
@@ -157,22 +119,30 @@ async def compare_versions(
     baseline_version_id: str = Query(description="The earlier version."),
     candidate_version_id: str = Query(description="The version to evaluate."),
 ) -> ScoreComparison:
-    """Diff the latest scores of two versions.
-
-    Powers the "did my edit help?" view, which is the feature that makes the
-    scorer feel like a tool rather than a verdict.
-
-    TODO: fetch the newest score for each version, then diff by finding `code`
-    rather than by prose message -- messages contain interpolated numbers and
-    would show spurious changes.
-    """
+    """Compare newest persisted scores and diff stable finding codes."""
+    await fetch_owned(Collections.RESUME_VERSIONS, baseline_version_id, user)
+    await fetch_owned(Collections.RESUME_VERSIONS, candidate_version_id, user)
+    scores = collection(Collections.ATS_SCORES)
+    user_oid = ObjectId(str(user.id))
+    baseline = await scores.find_one(
+        {"resume_version_id": ObjectId(baseline_version_id), "user_id": user_oid},
+        sort=[("computed_at", -1)],
+    )
+    candidate = await scores.find_one(
+        {"resume_version_id": ObjectId(candidate_version_id), "user_id": user_oid},
+        sort=[("computed_at", -1)],
+    )
+    if baseline is None or candidate is None:
+        raise NotFoundError("Both versions must have a completed ATS score.")
+    old_codes = {finding["code"] for finding in baseline.get("findings", [])}
+    new_codes = {finding["code"] for finding in candidate.get("findings", [])}
     return ScoreComparison(
         baseline_version_id=baseline_version_id,
         candidate_version_id=candidate_version_id,
-        baseline_overall=79.0,
-        candidate_overall=87.5,
-        resolved_findings=["missing_required_keyword", "weak_action_verb"],
-        new_findings=["length_density_high"],
+        baseline_overall=baseline["overall"],
+        candidate_overall=candidate["overall"],
+        resolved_findings=sorted(old_codes - new_codes),
+        new_findings=sorted(new_codes - old_codes),
     )
 
 
@@ -181,24 +151,27 @@ async def compare_versions(
     summary="What an ATS actually sees",
 )
 async def extracted_text(version_id: str, user: CurrentUser) -> dict[str, object]:
-    """Return the raw text recovered from the compiled PDF.
-
-    Worth building early. Showing someone that their elegant two-column
-    template linearizes into scrambled nonsense is more persuasive than any
-    score, and it is the feature users screenshot and share.
-
-    TODO: read `ATSScore.extracted_text` from the newest score for this
-    version; if none exists, extract on demand and cache it.
-    """
+    """Return the most recent PDF text extraction for an owned version."""
+    await fetch_owned(Collections.RESUME_VERSIONS, version_id, user)
+    score = await collection(Collections.ATS_SCORES).find_one(
+        {
+            "resume_version_id": ObjectId(version_id),
+            "user_id": ObjectId(str(user.id)),
+        },
+        sort=[("computed_at", -1)],
+        projection={"extracted_text": 1, "extraction_confidence": 1},
+    )
+    if score is None:
+        raise NotFoundError("No completed ATS extraction exists for this version.")
+    confidence = score.get("extraction_confidence")
+    warnings = (
+        ["The PDF text extraction was incomplete; review the compiled document carefully."]
+        if confidence is not None and confidence < 0.8
+        else []
+    )
     return {
         "version_id": version_id,
-        "extraction_confidence": 0.98,
-        "text": (
-            "ADA LOVELACE\nada@example.com | London, UK\n\n"
-            "EXPERIENCE\nSenior Backend Engineer, Acme Corp | Jan 2023 - Present\n"
-            "Rebuilt the payment retry pipeline cutting failed-charge rate from 4.2% "
-            "to 0.8% across 1.2M monthly transactions using idempotency keys and "
-            "exponential backoff in a Redis-backed job queue.\n"
-        ),
-        "warnings": [],
+        "extraction_confidence": confidence,
+        "text": score.get("extracted_text") or "",
+        "warnings": warnings,
     }

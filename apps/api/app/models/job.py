@@ -2,9 +2,10 @@
 
 Two collections, because postings are shared and matches are personal.
 
-`jobs` is deduplicated globally on `(source.board, source.external_id)`. Ten
-users watching the same Stripe listing store one posting, one parse, one
-embedding -- the parse is the expensive part, so paying for it once matters.
+`jobs` uses the board-native `(source.board, source.external_id)` key when an
+integration supplies it, and a normalized company/title/description hash for
+user-pasted postings. Those two sources share a record without pretending a
+manual URL has been crawled or verified.
 
 `job_matches` holds the per-user score. Keeping it out of `jobs` avoids an
 unbounded per-user array inside a shared document (which would also make the
@@ -64,7 +65,7 @@ class JobStatus(StrEnum):
 
 class JobSource(AppModel):
     board: JobBoard
-    url: HttpUrl
+    url: HttpUrl | None = None
     external_id: str | None = Field(
         default=None,
         description="Board-native posting id. Combined with `board` this forms the "
@@ -101,10 +102,10 @@ class KeywordWeight(AppModel):
 
 
 class ParsedJob(AppModel):
-    """Structured extraction from the raw posting text.
+    """Conservative heuristic extraction from the raw posting text.
 
-    Computed once at ingest. Deliberately stored rather than derived on read:
-    it costs an LLM call, and job descriptions are immutable in practice.
+    Computed once at ingest and versioned so changes to parser logic are
+    explicit. It does not call an LLM or claim semantic understanding.
     """
 
     responsibilities: list[str] = Field(default_factory=list)
@@ -160,11 +161,19 @@ class MatchComponents(AppModel):
     the score down is what makes a user change their resume.
     """
 
-    skill_overlap: float = Field(ge=0, le=100)
-    keyword_coverage: float = Field(ge=0, le=100)
-    seniority_fit: float = Field(ge=0, le=100)
-    semantic_similarity: float = Field(ge=0, le=100)
-    location_fit: float = Field(ge=0, le=100)
+    skill_overlap: float | None = Field(default=None, ge=0, le=100)
+    keyword_coverage: float | None = Field(default=None, ge=0, le=100)
+    seniority_fit: float | None = Field(default=None, ge=0, le=100)
+    semantic_similarity: float | None = Field(
+        default=None, ge=0, le=100,
+        description="Null when no embedding model is configured; never a fabricated score.",
+    )
+    location_fit: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="Null until the user has a location or remote-work preference.",
+    )
 
 
 class JobMatch(MongoModel):
@@ -172,7 +181,7 @@ class JobMatch(MongoModel):
 
     user_id: PyObjectId
     job_id: PyObjectId
-    score: float = Field(ge=0, le=100)
+    score: float | None = Field(default=None, ge=0, le=100)
     components: MatchComponents
     matched_keywords: list[str] = Field(default_factory=list)
     missing_keywords: list[str] = Field(
@@ -189,7 +198,7 @@ class JobMatch(MongoModel):
 
 
 class JobIngestRequest(ApiModel):
-    """Ingest by URL or by pasted text.
+    """Save pasted posting text; any URL is retained as a citation only.
 
     Pasted text is the pragmatic path: many boards block scrapers, and asking
     the user to paste a description always works.
@@ -199,11 +208,16 @@ class JobIngestRequest(ApiModel):
     description_raw: str | None = Field(default=None, max_length=60_000)
     company_name: str | None = None
     title: str | None = None
+    status: JobStatus = JobStatus.UNKNOWN
 
     @model_validator(mode="after")
-    def _require_one(self) -> JobIngestRequest:
-        if not self.url and not self.description_raw:
-            raise ValueError("provide either `url` or `description_raw`")
+    def _require_manual_source_data(self) -> JobIngestRequest:
+        if not self.description_raw or not self.description_raw.strip():
+            raise ValueError("paste the job description; URL scraping is not configured")
+        if not self.company_name or not self.company_name.strip():
+            raise ValueError("company_name is required for a pasted job")
+        if not self.title or not self.title.strip():
+            raise ValueError("title is required for a pasted job")
         return self
 
 

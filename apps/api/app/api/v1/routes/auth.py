@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
+from bson import ObjectId
 from fastapi import APIRouter, Body, status
 from pymongo.errors import DuplicateKeyError
 
@@ -11,16 +12,15 @@ from app.api.deps import CurrentUser
 from app.core.config import get_settings
 from app.core.errors import ConflictError, UnauthorizedError
 from app.core.security import (
+    AuthError,
     create_access_token,
     create_refresh_token,
+    decode_token,
     hash_password,
     token_expiry_seconds,
     verify_password,
-    decode_token,
-    AuthError,
 )
 from app.db.mongo import Collections, collection, get_client
-from app.models.base import utcnow
 from app.models.profile import CareerProfile, ContactBlock
 from app.models.user import (
     TokenPair,
@@ -31,6 +31,7 @@ from app.models.user import (
     UserRole,
     UserStatus,
 )
+from app.services.auth_rate_limit import enforce_auth_rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -47,6 +48,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 )
 async def register(payload: UserCreate) -> TokenPair:
     """Create a user and their empty career profile atomically, then sign them in."""
+    await enforce_auth_rate_limit(action="register", identity=str(payload.email))
 
     # 1. Hash the password.
     #
@@ -71,39 +73,38 @@ async def register(payload: UserCreate) -> TokenPair:
     # Both the user and career profile must be created successfully.
     # If either operation fails, MongoDB rolls the transaction back.
     try:
-        async with await client.start_session() as session:
-            async with session.start_transaction():
+        async with await client.start_session() as session, session.start_transaction():
 
-                # 5. Insert the user.
-                user_result = await collection(
-                    Collections.USERS
-                ).insert_one(
-                    user.to_mongo(),
-                    session=session,
-                )
+            # 5. Insert the user.
+            user_result = await collection(
+                Collections.USERS
+            ).insert_one(
+                user.to_mongo(),
+                session=session,
+            )
 
-                # 6. Create the user's initial empty career profile.
-                profile = CareerProfile(
-                    user_id=str(user_result.inserted_id),
-                    contact=ContactBlock(
-                        full_name=payload.full_name,
-                        email=str(payload.email),
-                    ),
-                )
+            # 6. Create the user's initial empty career profile.
+            profile = CareerProfile(
+                user_id=str(user_result.inserted_id),
+                contact=ContactBlock(
+                    full_name=payload.full_name,
+                    email=str(payload.email),
+                ),
+            )
 
-                # Convert the Pydantic model into a MongoDB document.
-                profile_doc = profile.to_mongo()
+            # Convert the Pydantic model into a MongoDB document.
+            profile_doc = profile.to_mongo()
 
-                # MongoDB relationship fields should use ObjectId.
-                profile_doc["user_id"] = user_result.inserted_id
+            # MongoDB relationship fields should use ObjectId.
+            profile_doc["user_id"] = user_result.inserted_id
 
-                # 7. Insert the career profile.
-                await collection(
-                    Collections.CAREER_PROFILES
-                ).insert_one(
-                    profile_doc,
-                    session=session,
-                )
+            # 7. Insert the career profile.
+            await collection(
+                Collections.CAREER_PROFILES
+            ).insert_one(
+                profile_doc,
+                session=session,
+            )
     except DuplicateKeyError as exc:
         raise ConflictError("An account with this email already exists.") from exc
 
@@ -128,6 +129,7 @@ async def register(payload: UserCreate) -> TokenPair:
 )
 async def login(payload: UserLogin) -> TokenPair:
     """Authenticate a user and issue JWT access and refresh tokens."""
+    await enforce_auth_rate_limit(action="login", identity=str(payload.email))
 
     # 1. Find the user by email.
     user_doc = await collection(
@@ -274,11 +276,11 @@ async def logout(user: CurrentUser) -> None:
     await collection(
         Collections.USERS
     ).update_one(
-        {"_id": user.id},
+        {"_id": ObjectId(str(user.id))},
         {"$inc": {"token_version": 1}},
     )
 
-    return None
+    return
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +313,7 @@ async def me(user: CurrentUser) -> UserPublic:
     "/config",
     summary="Get authentication configuration",
 )
-async def auth_config():
+async def auth_config() -> dict[str, int]:
     """Return authentication settings required by the frontend."""
 
     settings = get_settings()

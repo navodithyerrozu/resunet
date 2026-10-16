@@ -113,6 +113,8 @@ def parse_models() -> dict[str, Model]:
 
             for item in node.body:
                 if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    if field_is_excluded(item.value):
+                        continue
                     model.fields.append((item.target.id, item.annotation, item.value is not None))
                 elif isinstance(item, ast.Assign):
                     # StrEnum members.
@@ -132,6 +134,21 @@ def parse_models() -> dict[str, Model]:
             models[node.name] = model
 
     return models
+
+
+def field_is_excluded(value: ast.expr | None) -> bool:
+    """Mirror Pydantic serialization schemas by omitting ``Field(exclude=True)``."""
+    if not isinstance(value, ast.Call):
+        return False
+    function_name = value.func.id if isinstance(value.func, ast.Name) else None
+    if function_name != "Field":
+        return False
+    return any(
+        keyword.arg == "exclude"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value is True
+        for keyword in value.keywords
+    )
 
 
 def ancestry(models: dict[str, Model], name: str, seen: tuple[str, ...] = ()) -> list[str]:

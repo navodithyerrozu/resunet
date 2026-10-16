@@ -4,7 +4,13 @@ import { useState } from "react";
 
 import { Card, Chip, Meter, buttonClass } from "@/components/ui/primitives";
 
-import type { ATSScore, FindingSeverity, ScoreDimension } from "@resunet/shared";
+import type {
+  ATSScore,
+  FindingSeverity,
+  Page,
+  ScoreDimension,
+  ScoreSubmission,
+} from "@resunet/shared";
 import type { ChipTone } from "@/components/ui/primitives";
 
 const DIMENSION_LABELS: Record<ScoreDimension, string> = {
@@ -22,6 +28,9 @@ const SEVERITY_TONE: Record<FindingSeverity, ChipTone> = {
   warning: "warn",
   info: "neutral",
 };
+
+const SCORE_POLL_MS = 1_500;
+const SCORE_WAIT_MS = 90_000;
 
 function gradeTone(grade: string): ChipTone {
   if (grade.startsWith("A")) return "ok";
@@ -48,6 +57,7 @@ export function AtsScorePanel({
     try {
       const payload: { resumeVersionId: string; jobId?: string } = { resumeVersionId };
       if (jobId !== null) payload.jobId = jobId;
+      const requestedAt = Date.now();
       const response = await fetch("/api/ats/score", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -58,7 +68,29 @@ export function AtsScorePanel({
         setError(typeof body?.detail === "string" ? body.detail : "Scoring failed.");
         return;
       }
-      setScore((await response.json()) as ATSScore);
+      const submission = (await response.json()) as ScoreSubmission;
+      const deadline = requestedAt + SCORE_WAIT_MS;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, SCORE_POLL_MS));
+        const query = new URLSearchParams({ limit: "20" });
+        if (jobId !== null) query.set("jobId", jobId);
+        const historyResponse = await fetch(
+          `/api/ats/scores/${encodeURIComponent(resumeVersionId)}?${query.toString()}`,
+          { cache: "no-store" },
+        );
+        if (!historyResponse.ok) throw new Error("score history unavailable");
+        const history = (await historyResponse.json()) as Page<ATSScore>;
+        const completed = history.items.find(
+          (item) =>
+            item.job_id === jobId &&
+            (Date.parse(item.computed_at) >= requestedAt || submission.arqJobId == null),
+        );
+        if (completed !== undefined) {
+          setScore(completed);
+          return;
+        }
+      }
+      setError("Scoring is taking longer than expected. Try refreshing shortly.");
     } catch {
       setError("Could not reach the scorer.");
     } finally {

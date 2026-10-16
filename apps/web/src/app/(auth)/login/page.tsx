@@ -87,6 +87,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
           <LoginForm
             next={params.next ?? null}
             expired={params.reason === "expired"}
+            revocationFailed={params.reason === "logout-revocation-failed"}
           />
           <p className="mt-6 text-xs text-faint">
             No account?{" "}

@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "cursor/**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Web checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @resunet/shared typecheck
+      - run: pnpm --filter @resunet/web typecheck
+      - run: pnpm --filter @resunet/web lint
+      - run: pnpm --filter @resunet/shared build
+      - run: pnpm --filter @resunet/web build
+
+  python:
+    name: Python tests and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install API and worker packages
+        run: >-
+          python -m pip install
+          -e "apps/api[dev]"
+          -e "apps/render-worker[dev]"
+          -e "apps/automation-worker[dev]"
+      - name: Validate Compose secret boundaries and shared storage
+        run: python scripts/check_compose_config.py
+      - name: Check generated API contract
+        run: python scripts/gen_types_offline.py --check
+      - name: Test API
+        working-directory: apps/api
+        run: python -m pytest -q
+      - name: Type-check API
+        working-directory: apps/api
+        run: python -m mypy app
+      - name: Test render worker
+        working-directory: apps/render-worker
+        run: python -m pytest -q
+      - name: Type-check render worker
+        working-directory: apps/render-worker
+        run: python -m mypy worker
+      - name: Test automation worker
+        working-directory: apps/automation-worker
+        run: python -m pytest -q
+      - name: Type-check automation worker
+        working-directory: apps/automation-worker
+        run: python -m mypy worker
+      - name: Check queue contract
+        run: python -m pytest -q tests/test_queue_contract.py
+      - name: Lint Python packages
+        run: >-
+          python -m ruff check
+          apps/api/app apps/api/tests
+          apps/render-worker/worker apps/render-worker/tests
+          apps/automation-worker/worker apps/automation-worker/tests

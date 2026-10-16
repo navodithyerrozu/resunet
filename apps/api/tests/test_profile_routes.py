@@ -53,7 +53,7 @@ class FakeCollection:
     async def insert_one(self, doc: dict[str, Any]) -> None:
         self.docs.append(deepcopy(doc))
 
-    async def find_one(self, filt: dict[str, Any]) -> dict[str, Any] | None:
+    async def find_one(self, filt: dict[str, Any], **_: object) -> dict[str, Any] | None:
         for doc in self.docs:
             if _matches(doc, filt):
                 return deepcopy(doc)
@@ -64,6 +64,7 @@ class FakeCollection:
         filt: dict[str, Any],
         replacement: dict[str, Any],
         return_document: object = ReturnDocument.AFTER,
+        **_: object,
     ) -> dict[str, Any] | None:
         for index, doc in enumerate(self.docs):
             if _matches(doc, filt):
@@ -78,7 +79,7 @@ class FakeCollection:
         update: dict[str, Any],
         return_document: object = ReturnDocument.AFTER,
     ) -> dict[str, Any] | None:
-        for index, doc in enumerate(self.docs):
+        for doc in self.docs:
             if _matches(doc, filt):
                 before = deepcopy(doc)
                 self._apply(doc, update)
@@ -86,14 +87,18 @@ class FakeCollection:
                 return deepcopy(chosen)
         return None
 
-    async def update_one(self, filt: dict[str, Any], update: dict[str, Any]) -> _UpdateResult:
+    async def update_one(
+        self, filt: dict[str, Any], update: dict[str, Any], **_: object
+    ) -> _UpdateResult:
         for doc in self.docs:
             if _matches(doc, filt):
                 self._apply(doc, update)
                 return _UpdateResult(1, 1)
         return _UpdateResult(0, 0)
 
-    async def update_many(self, filt: dict[str, Any], update: dict[str, Any]) -> _UpdateResult:
+    async def update_many(
+        self, filt: dict[str, Any], update: dict[str, Any], **_: object
+    ) -> _UpdateResult:
         modified = 0
         matched = 0
         for doc in self.docs:
@@ -126,11 +131,29 @@ class FakeDB:
         return self._collections[name]
 
 
+class _Transaction:
+    async def __aenter__(self) -> _Transaction:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+
+class _Session(_Transaction):
+    def start_transaction(self) -> _Transaction:
+        return _Transaction()
+
+
+class _Client:
+    async def start_session(self) -> _Session:
+        return _Session()
+
+
 def _user(user_id: ObjectId, email: str, name: str) -> User:
     return User(
         id=str(user_id),
         email=email,
-        password_hash="argon2-not-a-real-hash",
+        password_hash="argon2-not-a-real-hash",  # noqa: S106 - synthetic test hash.
         full_name=name,
         status=UserStatus.ACTIVE,
         roles=[UserRole.USER],
@@ -168,6 +191,7 @@ def app(monkeypatch: pytest.MonkeyPatch, db: FakeDB) -> Any:
         return db[name]
 
     monkeypatch.setattr("app.api.v1.routes.profile.collection", fake_collection)
+    monkeypatch.setattr("app.api.v1.routes.profile.get_client", lambda: _Client())
     application = create_app()
 
     async def override_alice() -> User:
@@ -253,12 +277,19 @@ class TestPutProfile:
         }
         with TestClient(app) as client:
             response = client.put("/api/v1/profile", json=payload)
+            reloaded = client.get("/api/v1/profile")
         assert response.status_code == 200
+        assert reloaded.status_code == 200
         body = response.json()
+        reloaded_body = reloaded.json()
         assert str(body["user_id"]) == str(ALICE_ID)
         assert body["headline"] == "Staff engineer"
         assert body["contact"]["location"] == "Berlin"
         assert body["completeness"] == round(5 / 7, 4)
+        assert reloaded_body["headline"] == "Staff engineer"
+        assert reloaded_body["contact"]["location"] == "Berlin"
+        assert reloaded_body["education"][0]["institution"] == "TU Berlin"
+        assert reloaded_body["skills"][0]["name"] == "Python"
 
         stored = next(
             doc for doc in db[Collections.CAREER_PROFILES].docs if _same(doc["user_id"], ALICE_ID)
@@ -307,6 +338,46 @@ class TestPutProfile:
         assert body["experiences"][0]["entry_id"] == ENTRY_ID
         assert body["experiences"][0]["title"] == "Senior Engineer"
         assert body["projects"][0]["entry_id"] == PROJECT_ID
+
+    def test_profile_replacement_archives_removed_entry_bullets_atomically(
+        self, app: Any, db: FakeDB
+    ) -> None:
+        _insert_profile(
+            db,
+            user_id=ALICE_ID,
+            name="Alice Example",
+            email="alice@example.com",
+            experiences=[
+                {
+                    "entry_id": ENTRY_ID,
+                    "company": "Acme",
+                    "title": "Engineer",
+                    "dates": {"start": "2023-01-01"},
+                }
+            ],
+        )
+        bullet = Bullet(
+            user_id=str(ALICE_ID),
+            profile_entry_id=ENTRY_ID,
+            action="Reduced payment failures",
+            metric="by 35% quarter over quarter",
+            method="with idempotency checks",
+            status=BulletStatus.APPROVED,
+        )
+        db[Collections.BULLETS].docs.append(bullet.to_mongo())
+        payload = {
+            "user_id": str(ALICE_ID),
+            "contact": _contact(),
+            "experiences": [],
+            "projects": [],
+        }
+
+        with TestClient(app) as client:
+            response = client.put("/api/v1/profile", json=payload)
+
+        assert response.status_code == 200
+        assert response.json()["experiences"] == []
+        assert db[Collections.BULLETS].docs[0]["status"] == "archived"
 
     def test_invalid_payload_is_rejected(self, app: Any, db: FakeDB) -> None:
         _insert_profile(db, user_id=ALICE_ID, name="Alice Example", email="alice@example.com")

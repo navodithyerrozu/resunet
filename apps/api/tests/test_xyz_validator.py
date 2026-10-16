@@ -172,7 +172,12 @@ class TestMethodAndLength:
         assert XYZViolationCode.MISSING_METHOD in codes
 
     def test_rejects_overlong_bullet(self) -> None:
-        codes = {v.code for v in draft(method="using " + "a very long toolchain " * 15).validate_xyz()}
+        # Keep each component within its model bound while exceeding the
+        # assembled bullet limit enforced by validate_xyz().
+        codes = {
+            v.code
+            for v in draft(method="using " + "a very long toolchain " * 7).validate_xyz()
+        }
         assert XYZViolationCode.TOO_LONG in codes
 
     def test_length_limit_is_configurable(self) -> None:
@@ -195,7 +200,11 @@ class TestTextAssembly:
 
     def test_component_punctuation_is_normalised(self) -> None:
         """Trailing punctuation on components must not produce '..' when assembled."""
-        d = draft(action="Built the pipeline;", method="using Redis and Celery.")
+        d = draft(
+            action="Built the pipeline;",
+            metric="cut failures by 50 percent",
+            method="using Redis and Celery.",
+        )
         assert ".." not in d.text
         assert d.text.count(".") == 1
 

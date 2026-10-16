@@ -39,6 +39,9 @@ def _to_bullet(
     accepted: bool,
 ) -> Bullet:
     """Build a persistable Bullet from a completed graph result."""
+    achievement_id = payload.get("achievement_id")
+    if not isinstance(achievement_id, str) or not achievement_id:
+        raise ValueError("completed generation bullet is missing its achievement id")
     draft = payload["draft"]
     violations = [XYZViolation.model_validate(v) for v in payload.get("violations", [])]
     return Bullet(
@@ -52,6 +55,7 @@ def _to_bullet(
         source=BulletSource.AGENT_GENERATED,
         violations=violations,
         thread_id=thread_id,
+        generation_achievement_id=achievement_id,
         repair_attempts=int(payload.get("repair_attempts", 0)),
     )
 
@@ -85,13 +89,29 @@ async def finalize(state: ResumeAgentState) -> dict[str, object]:
         for item in flagged
     ]
 
+    persisted_ids: list[str] = []
     if bullets:
-        # insert_many with ordered=False so one bad document does not abort the
-        # rest -- losing every bullet because the fourth had a validation quirk
-        # would be a poor trade.
-        await collection(Collections.BULLETS).insert_many(
-            [b.to_mongo() for b in bullets], ordered=False
-        )
+        bullet_collection = collection(Collections.BULLETS)
+        for bullet in bullets:
+            bullet_id = ObjectId()
+            document = bullet.to_mongo()
+            document.update(
+                {
+                    "_id": bullet_id,
+                    "user_id": ObjectId(user_id),
+                    "profile_entry_id": ObjectId(profile_entry_id),
+                }
+            )
+            identity = {
+                "user_id": ObjectId(user_id),
+                "thread_id": thread_id,
+                "generation_achievement_id": bullet.generation_achievement_id,
+            }
+            await bullet_collection.update_one(identity, {"$setOnInsert": document}, upsert=True)
+            saved = await bullet_collection.find_one(identity)
+            if saved is None:
+                raise RuntimeError("finalized bullet was not readable after its upsert")
+            persisted_ids.append(str(saved["_id"]))
 
     await collection(Collections.AGENT_THREADS).update_one(
         {"thread_id": thread_id},
@@ -123,5 +143,6 @@ async def finalize(state: ResumeAgentState) -> dict[str, object]:
 
     return {
         "status": "done",
+        "persisted_bullet_ids": persisted_ids,
         "messages": [{"role": "assistant", "content": summary}],
     }

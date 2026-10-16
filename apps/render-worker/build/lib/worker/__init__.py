@@ -1,0 +1,1 @@
+"""ResuNet LaTeX render worker."""

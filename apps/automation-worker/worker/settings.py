@@ -9,8 +9,11 @@ gone -- treat it as a design change, not a config change.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,6 +35,7 @@ class AutomationSettings(BaseSettings):
 
     redis_uri: str = "redis://localhost:6379/0"
     automation_queue_name: str = "resunet:automation"
+    automation_allowed_hosts: str = ""
 
     render_storage_dir: Path = Path("./storage/renders")
     trace_storage_dir: Path = Path("./storage/traces")
@@ -78,25 +82,18 @@ class AutomationSettings(BaseSettings):
     # --- Browser ----------------------------------------------------------
     automation_headless: bool = Field(
         default=True,
-        description="Headless is more detectable even with --headless=new: font "
-        "metrics, GPU strings and a missing window manager all differ. Prefer "
-        "headful behind a virtual display for boards that fingerprint aggressively.",
+        description="Run Chromium without a visible window. The worker does not "
+        "modify browser fingerprints or attempt to evade access controls.",
     )
     automation_browser_channel: str | None = Field(
         default=None,
-        description="Set to 'chrome' to drive a real Chrome install rather than "
-        "Playwright's bundled Chromium, whose build strings are a known tell.",
+        description="Optional installed browser channel for compatibility testing.",
     )
     automation_proxy_url: str | None = Field(
         default=None,
-        description="Residential or ISP proxy. Datacenter IP ranges are the single "
-        "largest anti-bot trigger; cloud egress is often blocked before any "
-        "behavioural signal is even evaluated.",
+        description="Optional organization-approved egress proxy. A proxy is not "
+        "used to evade site restrictions; detected blocks stop the workflow.",
     )
-    automation_locale: str = "en-US"
-    automation_timezone: str = "America/New_York"
-    automation_viewport_width: int = Field(default=1440, ge=800)
-    automation_viewport_height: int = Field(default=900, ge=600)
 
     automation_nav_timeout_ms: int = Field(default=45_000, ge=5_000)
     automation_action_timeout_ms: int = Field(default=15_000, ge=1_000)
@@ -125,12 +122,27 @@ class AutomationSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _guard_production(self) -> AutomationSettings:
-        """Refuse production configurations that are known to get IPs banned."""
-        if self.environment == "production":
-            if not self.automation_proxy_url:
+        """Require a human gate and explicit host authorization in production."""
+        for host in self.authorized_application_hosts:
+            try:
+                ipaddress.ip_address(host)
+                continue
+            except ValueError:
+                pass
+            labels = host.split(".")
+            if not host or len(host) > 253 or any(
+                re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) is None
+                for label in labels
+            ):
                 raise ValueError(
-                    "AUTOMATION_PROXY_URL is required in production: submitting from "
-                    "datacenter IPs gets the egress range blocked for every user."
+                    "AUTOMATION_ALLOWED_HOSTS must contain exact hostnames or IP addresses; "
+                    "wildcards, URLs, and paths are not allowed."
+                )
+        if self.environment == "production":
+            if not self.authorized_application_hosts:
+                raise ValueError(
+                    "AUTOMATION_ALLOWED_HOSTS is required in production and must list "
+                    "each explicitly authorized application workflow hostname."
                 )
             if not self.automation_require_approval:
                 raise ValueError(
@@ -143,6 +155,33 @@ class AutomationSettings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def authorized_application_hosts(self) -> frozenset[str]:
+        return frozenset(
+            host.strip().lower().rstrip(".")
+            for host in self.automation_allowed_hosts.split(",")
+            if host.strip()
+        )
+
+    def is_application_url_authorized(self, url: str) -> bool:
+        """Match an exact allowlisted hostname and reject insecure remote URLs."""
+        try:
+            parsed = urlsplit(url)
+            host = (parsed.hostname or "").lower().rstrip(".")
+        except ValueError:
+            return False
+        if not host or parsed.username or parsed.password:
+            return False
+        if host not in self.authorized_application_hosts:
+            return False
+        if parsed.scheme == "https":
+            return True
+        return (
+            not self.is_production
+            and parsed.scheme == "http"
+            and host in {"localhost", "127.0.0.1", "::1"}
+        )
 
 
 @lru_cache(maxsize=1)

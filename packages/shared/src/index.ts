@@ -29,6 +29,15 @@ export type ResumeCreate = Schemas["ResumeCreate"];
 export type ResumeUpdate = Schemas["ResumeUpdate"];
 export type ResumeSection = Schemas["ResumeSection"];
 export type ContactBlock = Schemas["ContactBlock"];
+export type CareerProfile = Schemas["CareerProfile"];
+export type ExperienceEntry = Schemas["ExperienceEntry"];
+export type ProjectEntry = Schemas["ProjectEntry"];
+export type EducationEntry = Schemas["EducationEntry"];
+export type Skill = Schemas["Skill"];
+export type Certification = Schemas["Certification"];
+export type DateRange = Schemas["DateRange"];
+export type EmploymentType = Schemas["EmploymentType"];
+export type SkillProficiency = Schemas["SkillProficiency"];
 
 export type Bullet = Schemas["Bullet"];
 export type BulletProposal = Schemas["BulletProposal"];
@@ -42,17 +51,22 @@ export type ATSFinding = Schemas["ATSFinding"];
 export type DimensionScore = Schemas["DimensionScore"];
 export type KeywordAnalysis = Schemas["KeywordAnalysis"];
 export type ScoreRequest = Schemas["ScoreRequest"];
+export type ScoreSubmission = Schemas["ScoreSubmission"];
 
 export type Application = Schemas["Application"];
+export type ApplicationCreate = Schemas["ApplicationCreate"];
 export type ApplicationSummary = Schemas["ApplicationSummary"];
 export type SubmissionAttempt = Schemas["SubmissionAttempt"];
 export type ApplicationEvent = Schemas["ApplicationEvent"];
 
 export type JobSummary = Schemas["JobSummary"];
+export type Job = Schemas["Job"];
+export type JobIngestRequest = Schemas["JobIngestRequest"];
 
 export type GenerateStartRequest = Schemas["GenerateStartRequest"];
 export type GenerateTurnRequest = Schemas["GenerateTurnRequest"];
 export type GenerateTurnResponse = Schemas["GenerateTurnResponse"];
+export type ProposalDecision = Schemas["ProposalDecision"];
 
 export type TokenPair = Schemas["TokenPair"];
 export type UserCreate = Schemas["UserCreate"];
@@ -125,6 +139,8 @@ export const APPLICATION_STAGES: Record<
   interviewing: { rank: 6, label: "Interviewing", terminal: false, needsUser: true },
   offer: { rank: 7, label: "Offer", terminal: true, needsUser: true },
   failed: { rank: 3, label: "Failed", terminal: false, needsUser: true },
+  blocked: { rank: 3, label: "Blocked", terminal: false, needsUser: true },
+  needs_review: { rank: 3, label: "Needs review", terminal: false, needsUser: true },
   rejected: { rank: 8, label: "Rejected", terminal: true, needsUser: false },
   withdrawn: { rank: 8, label: "Withdrawn", terminal: true, needsUser: false },
   ghosted: { rank: 8, label: "Ghosted", terminal: true, needsUser: false },

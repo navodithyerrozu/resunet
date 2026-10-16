@@ -13,6 +13,7 @@ this module is cheap insurance against that.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import structlog
@@ -78,13 +79,11 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 class WorkerSettings:
     """ARQ configuration.
 
-    `max_tries=2` is low on purpose. LaTeX failures are deterministic and are
-    already handled inside the task without raising, so the retries here exist
-    only for infrastructure faults -- one extra attempt covers a Mongo failover
-    or a brief network partition, and more would just delay a real error.
+    LaTeX failures are deterministic and are handled inside the task without
+    raising. The bounded retries are for transient infrastructure faults.
     """
 
-    functions = [render_resume_pdf, score_resume_ats]
+    functions: list[Callable[..., Any]] = [render_resume_pdf, score_resume_ats]
     on_startup = startup
     on_shutdown = shutdown
 
@@ -96,7 +95,7 @@ class WorkerSettings:
     queue_name = get_settings().render_queue_name
     max_jobs = get_settings().render_concurrency
     job_timeout = get_settings().render_job_timeout_seconds
-    max_tries = 2
+    max_tries = get_settings().render_max_tries
 
     # Results are kept an hour so the UI can poll for an outcome after a page
     # reload. Longer would accumulate PDF metadata in Redis for no benefit --

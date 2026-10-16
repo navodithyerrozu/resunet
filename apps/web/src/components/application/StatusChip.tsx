@@ -30,6 +30,8 @@ const STATUS_TONE: Record<ApplicationStatus, ChipTone> = {
   interviewing: "ok",
   offer: "ok",
   failed: "danger",
+  blocked: "danger",
+  needs_review: "warn",
   rejected: "neutral",
   withdrawn: "neutral",
   ghosted: "neutral",

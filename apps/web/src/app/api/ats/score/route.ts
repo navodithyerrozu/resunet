@@ -16,9 +16,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const score = await withFreshSession(() => scoreVersion(payload));
+    const submission = await withFreshSession(() => scoreVersion(payload));
     revalidateTag("resumes");
-    return NextResponse.json(score, { status: 200 });
+    return NextResponse.json(submission, { status: 202 });
   } catch (error) {
     return apiErrorResponse(error);
   }

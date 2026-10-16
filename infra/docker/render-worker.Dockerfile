@@ -25,13 +25,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /srv/render-worker
 
 COPY apps/render-worker/pyproject.toml ./
-RUN pip install --upgrade pip && pip install -e "."
+COPY apps/render-worker/worker ./worker
+RUN pip install --upgrade pip && pip install .
 
-COPY apps/render-worker/ ./
-
-RUN useradd --create-home --uid 10002 renderuser \
+RUN groupadd --system --gid 10003 renderdata \
+    && useradd --create-home --uid 10002 --gid renderdata renderuser \
     && mkdir -p /srv/storage/renders \
-    && chown -R renderuser:renderuser /srv
+    && chown -R renderuser:renderdata /srv \
+    && chmod 2775 /srv/storage/renders
 USER renderuser
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+    CMD ["arq", "worker.main.WorkerSettings", "--check"]
 
 CMD ["arq", "worker.main.WorkerSettings"]

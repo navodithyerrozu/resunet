@@ -122,7 +122,7 @@ class TestRetryEligibility:
         This is the structural reason the policy is safe to extend: adding a
         member to `AttemptOutcome` cannot accidentally make it retryable.
         """
-        assert retry._RETRYABLE == frozenset({AttemptOutcome.RETRYABLE_FAILURE})
+        assert frozenset({AttemptOutcome.RETRYABLE_FAILURE}) == retry._RETRYABLE
         assert retry.should_retry("some_future_outcome", 1) is False  # type: ignore[arg-type]
 
 

@@ -12,7 +12,7 @@ outstanding refresh token for that user in one write.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -43,7 +43,7 @@ class AuthError(Exception):
 
 
 def hash_password(password: str) -> str:
-    return _pwd_context.hash(password)
+    return cast(str, _pwd_context.hash(password))
 
 
 def verify_password(plain: str, hashed: str) -> bool:
@@ -53,7 +53,7 @@ def verify_password(plain: str, hashed: str) -> bool:
     fails closed instead of 500-ing the login endpoint.
     """
     try:
-        return _pwd_context.verify(plain, hashed)
+        return cast(bool, _pwd_context.verify(plain, hashed))
     except (ValueError, TypeError):
         return False
 
@@ -64,7 +64,7 @@ def needs_rehash(hashed: str) -> bool:
     Call after a successful login and transparently upgrade the stored hash;
     that is how you migrate cost parameters without a password reset.
     """
-    return _pwd_context.needs_update(hashed)
+    return cast(bool, _pwd_context.needs_update(hashed))
 
 
 def _create_token(
@@ -86,7 +86,9 @@ def _create_token(
     if extra_claims:
         payload.update(extra_claims)
     settings = get_settings()
-    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    return cast(
+        str, jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    )
 
 
 def create_access_token(
@@ -96,7 +98,7 @@ def create_access_token(
     return _create_token(
         subject=subject,
         token_version=token_version,
-        token_type="access",
+        token_type="access",  # noqa: S106 - JWT claim discriminator, not a credential.
         expires_delta=timedelta(minutes=settings.access_token_ttl_minutes),
         extra_claims={"roles": roles or ["user"]},
     )
@@ -107,7 +109,7 @@ def create_refresh_token(*, subject: str, token_version: int) -> str:
     return _create_token(
         subject=subject,
         token_version=token_version,
-        token_type="refresh",
+        token_type="refresh",  # noqa: S106 - JWT claim discriminator, not a credential.
         expires_delta=timedelta(days=settings.refresh_token_ttl_days),
     )
 

@@ -38,7 +38,9 @@ class TestInjectionNeutralisation:
 
     def test_brace_groups_cannot_be_opened(self) -> None:
         escaped = escape_latex("}{\\evil{")
-        assert escaped.count(r"\{") == 1
+        # Both opening braces supplied by the user must be escaped. The
+        # backslash's generated `\\textbackslash{}` is trusted markup.
+        assert escaped.count(r"\{") == 2
         assert escaped.count(r"\}") == 1
 
     @pytest.mark.parametrize("char", ["$", "&", "#", "_", "%", "~", "^"])

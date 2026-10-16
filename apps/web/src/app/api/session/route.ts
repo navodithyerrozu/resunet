@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 
+import { withFreshSession } from "@/lib/api/client";
 import { login, logout } from "@/lib/api/endpoints";
-import { clearSession, writeSession } from "@/lib/api/session";
 import { ApiError, ApiTimeoutError, UnauthorizedError } from "@/lib/api/errors";
+import { clearSession, writeSession } from "@/lib/api/session";
 
 /**
  * The login/logout boundary.
@@ -64,18 +65,35 @@ export async function POST(request: Request): Promise<NextResponse> {
  * Log out.
  *
  * The backend call bumps `token_version`, which invalidates every outstanding
- * refresh token for the account rather than just this browser's. If that call
- * fails the cookies are still cleared -- leaving a user apparently logged in
- * because the API was briefly unreachable is the worse outcome, and the tokens
- * they keep are the ones they already had.
+ * refresh token for the account rather than just this browser's. If the API is
+ * unavailable, local cookies are still cleared but the response reports that
+ * global revocation could not be confirmed.
  */
 export async function DELETE(): Promise<NextResponse> {
+  let revocationFailed = false;
   try {
-    await logout();
+    await withFreshSession(() => logout());
   } catch (error) {
-    if (!(error instanceof ApiError) && !(error instanceof ApiTimeoutError)) throw error;
+    if (
+      error instanceof ApiError ||
+      error instanceof ApiTimeoutError ||
+      error instanceof TypeError
+    ) {
+      revocationFailed = true;
+    } else {
+      throw error;
+    }
   } finally {
     await clearSession();
+  }
+  if (revocationFailed) {
+    return NextResponse.json(
+      {
+        detail:
+          "This device is signed out, but server-side session revocation could not be confirmed.",
+      },
+      { status: 503 },
+    );
   }
   return new NextResponse(null, { status: 204 });
 }

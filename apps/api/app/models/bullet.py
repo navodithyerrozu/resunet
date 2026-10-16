@@ -64,19 +64,30 @@ _METRIC_PATTERN = re.compile(
 )
 
 # Openers that signal duty-listing rather than impact.
-_WEAK_OPENERS = frozenset({
-    "responsible", "worked", "helped", "assisted", "participated",
-    "involved", "tasked", "duties", "handled", "supported", "contributed",
-})
+_WEAK_OPENERS = frozenset(
+    {
+        "responsible",
+        "worked",
+        "helped",
+        "assisted",
+        "participated",
+        "involved",
+        "tasked",
+        "duties",
+        "handled",
+        "supported",
+        "contributed",
+    }
+)
 
 
 class BulletStatus(StrEnum):
     """Lifecycle of a bullet through the generate/validate/approve pipeline."""
 
-    DRAFT = "draft"                  # produced, not yet validated
-    NEEDS_REVIEW = "needs_review"    # failed validation past the repair budget
-    APPROVED = "approved"            # passed validation and/or user-confirmed
-    ARCHIVED = "archived"            # retired, retained for history
+    DRAFT = "draft"  # produced, not yet validated
+    NEEDS_REVIEW = "needs_review"  # failed validation past the repair budget
+    APPROVED = "approved"  # passed validation and/or user-confirmed
+    ARCHIVED = "archived"  # retired, retained for history
 
 
 class BulletSource(StrEnum):
@@ -84,8 +95,14 @@ class BulletSource(StrEnum):
 
     USER_AUTHORED = "user_authored"
     AGENT_GENERATED = "agent_generated"
-    AGENT_REWRITTEN = "agent_rewritten"   # user text improved by the agent
-    IMPORTED = "imported"                 # parsed from an uploaded resume
+    AGENT_REWRITTEN = "agent_rewritten"  # user text improved by the agent
+    IMPORTED = "imported"  # parsed from an uploaded resume
+
+
+class ProposalReviewDecision(StrEnum):
+    ACCEPTED = "accepted"
+    REVISED = "revised"
+    REJECTED = "rejected"
 
 
 class XYZViolationCode(StrEnum):
@@ -193,7 +210,12 @@ class BulletDraft(ApiModel):
             )
 
         first_word = self.action.split()[0].lower().rstrip(",")
-        if first_word in _WEAK_OPENERS:
+        duty_phrase_after_pronoun = re.match(
+            r"^(?:i|we)\s+(?:was|were)\s+(?:responsible|involved|tasked|handling|supporting)\b",
+            self.action.strip(),
+            re.IGNORECASE,
+        )
+        if first_word in _WEAK_OPENERS or duty_phrase_after_pronoun:
             violations.append(
                 XYZViolation(
                     code=XYZViolationCode.WEAK_VERB,
@@ -269,8 +291,16 @@ class Bullet(MongoModel):
         default=None,
         description="LangGraph thread that produced this bullet; enables replay.",
     )
+    generation_achievement_id: str | None = Field(
+        default=None,
+        description="Stable graph achievement key; makes finalization idempotent.",
+    )
+    review_decision: ProposalReviewDecision | None = Field(
+        default=None, description="The user's final decision for an agent-generated bullet."
+    )
     repair_attempts: int = Field(
-        default=0, ge=0,
+        default=0,
+        ge=0,
         description="Repair passes consumed. Guards against unbounded LLM loops.",
     )
 

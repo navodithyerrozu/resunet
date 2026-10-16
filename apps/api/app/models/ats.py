@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field, computed_field
 
@@ -35,9 +36,9 @@ class ScoreDimension(StrEnum):
 
 
 class FindingSeverity(StrEnum):
-    CRITICAL = "critical"   # content will be lost or misread
-    WARNING = "warning"     # measurably weakens the application
-    INFO = "info"           # polish
+    CRITICAL = "critical"  # content will be lost or misread
+    WARNING = "warning"  # measurably weakens the application
+    INFO = "info"  # polish
 
 
 class ATSFinding(ApiModel):
@@ -88,9 +89,9 @@ class KeywordAnalysis(AppModel):
 class ATSScore(MongoModel):
     """Collection: `ats_scores`.
 
-    Append-only: a new document per scoring run rather than an update in
-    place, so the score history over successive resume versions is a real
-    time series the user can watch improve.
+    Append-only per immutable PDF, job context, and engine version. Replaying a
+    queue delivery reuses the same result; upgrading the scoring engine creates
+    a new history entry the user can compare.
     """
 
     user_id: PyObjectId
@@ -116,19 +117,33 @@ class ATSScore(MongoModel):
         "convincing artifact in the product.",
     )
     extraction_confidence: float | None = Field(
-        default=None, ge=0, le=1,
+        default=None,
+        ge=0,
+        le=1,
         description="Low values mean the PDF barely parsed, which is itself the finding.",
     )
 
     engine_version: str = Field(default="v1")
+    # Internal worker replay guard. It is stored in MongoDB and indexed, but
+    # excluded from API serialization and the generated public contract.
+    idempotency_key: str | None = Field(default=None, exclude=True)
     computed_at: datetime
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def grade(self) -> str:
         """Letter grade. Users act on 'C+' far more readily than on '78.4'."""
-        thresholds = [(93, "A"), (90, "A-"), (87, "B+"), (83, "B"), (80, "B-"),
-                      (77, "C+"), (73, "C"), (70, "C-"), (60, "D")]
+        thresholds = [
+            (93, "A"),
+            (90, "A-"),
+            (87, "B+"),
+            (83, "B"),
+            (80, "B-"),
+            (77, "C+"),
+            (73, "C"),
+            (70, "C-"),
+            (60, "D"),
+        ]
         return next((g for cutoff, g in thresholds if self.overall >= cutoff), "F")
 
     @computed_field  # type: ignore[prop-decorator]
@@ -142,12 +157,18 @@ class ATSScore(MongoModel):
 
 class ScoreRequest(ApiModel):
     resume_version_id: PyObjectId
-    job_id: PyObjectId | None = Field(
-        default=None, description="Omit for a format-only score."
-    )
+    job_id: PyObjectId | None = Field(default=None, description="Omit for a format-only score.")
     include_extracted_text: bool = Field(
         default=False, description="Adds ~20KB to the response; off by default."
     )
+
+
+class ScoreSubmission(ApiModel):
+    """Accepted background scoring request; clients read the result from history."""
+
+    status: Literal["queued"] = "queued"
+    resume_version_id: PyObjectId
+    arq_job_id: str | None = None
 
 
 class ScoreComparison(ApiModel):

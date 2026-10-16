@@ -89,7 +89,7 @@ class UserPublic(ApiModel):
 class TokenPair(ApiModel):
     access_token: str
     refresh_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105 - OAuth token type, not a credential.
     expires_in: int = Field(description="Access-token lifetime in seconds.")
 
 

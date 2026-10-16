@@ -136,7 +136,12 @@ async def enqueue_render(
 
 
 async def enqueue_submission(
-    *, application_id: str, user_id: str, defer_seconds: int = 0
+    *,
+    application_id: str,
+    user_id: str,
+    defer_seconds: int = 0,
+    approved: bool = False,
+    attempt_number: int = 1,
 ) -> str | None:
     """Queue an application submission.
 
@@ -148,7 +153,9 @@ async def enqueue_submission(
         TaskName.SUBMIT_APPLICATION.value,
         application_id=application_id,
         user_id=user_id,
-        _job_id=f"submit:{application_id}",
+        approved=approved,
+        attempt_number=attempt_number,
+        _job_id=f"submit:{application_id}:attempt:{attempt_number}:approved:{int(approved)}",
         _defer_by=defer_seconds or None,
         _queue_name=get_settings().automation_queue_name,
     )

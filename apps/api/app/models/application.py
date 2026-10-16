@@ -34,6 +34,8 @@ class ApplicationStatus(StrEnum):
     AWAITING_APPROVAL = "awaiting_approval"  # form filled, paused for human confirm
     SUBMITTED = "submitted"
     FAILED = "failed"
+    BLOCKED = "blocked"  # automation worker encountered a bot wall or access barrier
+    NEEDS_REVIEW = "needs_review"  # worker stopped safely on an unmapped or ambiguous form
     ACKNOWLEDGED = "acknowledged"
     SCREENING = "screening"
     INTERVIEWING = "interviewing"

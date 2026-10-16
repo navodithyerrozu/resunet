@@ -9,12 +9,16 @@ off the shared storage volume -- it has to execute where the artifact lives.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
 import structlog
+from arq import Retry
+from pymongo.errors import DuplicateKeyError
 
 from worker import ats, db, storage
+from worker.settings import get_settings
 
 logger = structlog.get_logger(__name__)
 
@@ -28,12 +32,47 @@ async def score_resume_ats(
     user_id: str,
     job_id: str | None = None,
 ) -> dict[str, Any]:
-    """Score a rendered resume version and append an `ats_scores` document."""
+    """Score a PDF with bounded retries for transient infrastructure failures."""
+    settings = get_settings()
+    try:
+        return await _score_resume_ats_once(
+            ctx, version_id=version_id, user_id=user_id, job_id=job_id
+        )
+    except Exception as exc:
+        job_try = ctx.get("job_try", 1)
+        current_try = (
+            job_try
+            if isinstance(job_try, int) and job_try > 0
+            else settings.render_max_tries
+        )
+        if current_try < settings.render_max_tries:
+            logger.warning(
+                "ats.retry_scheduled",
+                version_id=version_id,
+                error_type=type(exc).__name__,
+            )
+            raise Retry(defer=settings.render_retry_delay_seconds) from exc
+        logger.error(
+            "ats.retries_exhausted",
+            version_id=version_id,
+            error_type=type(exc).__name__,
+        )
+        raise
+
+
+async def _score_resume_ats_once(
+    ctx: dict[str, Any],
+    *,
+    version_id: str,
+    user_id: str,
+    job_id: str | None = None,
+) -> dict[str, Any]:
+    """Calculate a version's score and persist at most one result per engine."""
     log = logger.bind(version_id=version_id, user_id=user_id, job_id=job_id)
 
     version = await db.db()["resume_versions"].find_one(
         {"_id": _oid(version_id), "user_id": _oid(user_id)},
-        {"pdf_path": 1, "page_count": 1},
+        {"pdf_path": 1, "page_count": 1, "resume_id": 1},
     )
     if version is None:
         log.warning("ats.version_not_found")
@@ -53,25 +92,34 @@ async def score_resume_ats(
     overall = sum(d["score"] * d["weight"] for d in dimensions)
     computed_at = datetime.now(UTC)
 
-    await db.db()["ats_scores"].insert_one(
-        {
-            "user_id": _oid(user_id),
-            "resume_version_id": _oid(version_id),
-            "job_id": _oid(job_id) if job_id else None,
-            "overall": round(overall, 1),
-            "dimensions": dimensions,
-            "findings": findings,
-            "keyword_analysis": keyword_analysis,
-            # Truncated to the model's declared ceiling. Storing the full text of
-            # a ten-page PDF would bloat every document read in the score history.
-            "extracted_text": extraction.text[:40_000],
-            "extraction_confidence": extraction.confidence,
-            "engine_version": ENGINE_VERSION,
-            "computed_at": computed_at,
-            "created_at": computed_at,
-            "updated_at": computed_at,
-        }
-    )
+    score_doc = {
+        "user_id": _oid(user_id),
+        "resume_version_id": _oid(version_id),
+        "job_id": _oid(job_id) if job_id else None,
+        "overall": round(overall, 1),
+        "dimensions": dimensions,
+        "findings": findings,
+        "keyword_analysis": keyword_analysis,
+        # Truncated to the model's declared ceiling. Storing the full text of
+        # a ten-page PDF would bloat every document read in the score history.
+        "extracted_text": extraction.text[:40_000],
+        "extraction_confidence": extraction.confidence,
+        "engine_version": ENGINE_VERSION,
+        "computed_at": computed_at,
+        "created_at": computed_at,
+        "updated_at": computed_at,
+    }
+    idempotency_key = f"{version_id}:{job_id or 'generic'}:{ENGINE_VERSION}"
+    score_key = {"idempotency_key": idempotency_key}
+    score_doc["idempotency_key"] = idempotency_key
+    # Another concurrent delivery can win between lookup and upsert; the
+    # unique key guarantees its score is already persisted in that case.
+    with suppress(DuplicateKeyError):
+        await db.db()["ats_scores"].update_one(
+            score_key,
+            {"$setOnInsert": score_doc},
+            upsert=True,
+        )
 
     # Denormalized onto the resume so list views render a score without a join.
     await db.db()["resumes"].update_one(
@@ -208,14 +256,14 @@ def _assess(
 
 
 async def _load_keywords(job_id: str) -> dict[str, list[str]] | None:
-    doc = await db.db()["jobs"].find_one(
-        {"_id": _oid(job_id)}, {"required_keywords": 1, "preferred_keywords": 1}
-    )
+    doc = await db.db()["jobs"].find_one({"_id": _oid(job_id)}, {"parsed.keywords": 1})
     if doc is None:
         return None
+    parsed = doc.get("parsed") or {}
+    keywords = parsed.get("keywords") or []
     return {
-        "required": doc.get("required_keywords", []),
-        "preferred": doc.get("preferred_keywords", []),
+        "required": [item["term"] for item in keywords if item.get("required")],
+        "preferred": [item["term"] for item in keywords if not item.get("required")],
     }
 
 

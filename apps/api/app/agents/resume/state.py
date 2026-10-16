@@ -88,6 +88,8 @@ class ResumeAgentState(TypedDict, total=False):
     # --- Output ----------------------------------------------------------
     completed_bullets: Annotated[list[CompletedBullet], add]
     flagged_bullets: Annotated[list[CompletedBullet], add]
+    # IDs assigned by the finalizer in proposal order, exposed for user review.
+    persisted_bullet_ids: list[str]
 
     # --- Control ---------------------------------------------------------
     status: Literal["mining", "drafting", "validating", "repairing", "awaiting_user", "done"]

@@ -19,6 +19,8 @@ import { useState, useTransition } from "react";
 
 const SECTIONS = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/profile", label: "Profile" },
+  { href: "/jobs", label: "Jobs" },
   { href: "/resumes", label: "Resumes" },
   { href: "/applications", label: "Applications" },
 ] as const;
@@ -40,6 +42,13 @@ function SignOutButton() {
       // dead backend leaves the browser signed out rather than showing an app
       // shell backed by a session the API has already rejected.
       const response = await fetch("/api/session", { method: "DELETE" });
+      if (response.status === 503) {
+        startTransition(() => {
+          router.replace("/login?reason=logout-revocation-failed");
+          router.refresh();
+        });
+        return;
+      }
       if (!response.ok) throw new Error(`sign out failed: ${response.status}`);
       startTransition(() => {
         router.replace("/login");

@@ -7,14 +7,16 @@ exhaust `maxIncomingConnections` during a traffic spike.
 
 from __future__ import annotations
 
+from typing import Any
+
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from worker.settings import get_settings
 
-_client: AsyncIOMotorClient | None = None
+_client: AsyncIOMotorClient[dict[str, Any]] | None = None
 
 
-def connect() -> AsyncIOMotorDatabase:
+def connect() -> AsyncIOMotorDatabase[dict[str, Any]]:
     """Open the connection pool. Called from ARQ's `on_startup`."""
     global _client
     if _client is None:
@@ -31,7 +33,7 @@ def connect() -> AsyncIOMotorDatabase:
     return _client[get_settings().mongodb_db]
 
 
-def db() -> AsyncIOMotorDatabase:
+def db() -> AsyncIOMotorDatabase[dict[str, Any]]:
     if _client is None:
         raise RuntimeError("Mongo not connected -- connect() runs in ARQ on_startup")
     return _client[get_settings().mongodb_db]

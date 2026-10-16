@@ -1,9 +1,8 @@
 """Render-worker configuration.
 
-A deliberately narrow subset of the API's settings. The worker reads the same
-`.env`, so shared keys keep the same names, but it declares only what it uses:
-a worker that cannot see `JWT_SECRET_KEY` or `CREDENTIAL_ENCRYPTION_KEY` cannot
-leak them.
+A deliberately narrow subset of the API's settings. Compose supplies only the
+shared connection values and render settings the worker needs. It never receives
+`JWT_SECRET_KEY` or `CREDENTIAL_ENCRYPTION_KEY`.
 """
 
 from __future__ import annotations
@@ -65,6 +64,8 @@ class RenderSettings(BaseSettings):
         "single-threaded, so useful concurrency tracks core count, not IO capacity.",
     )
     render_job_timeout_seconds: int = Field(default=120, ge=10, le=600)
+    render_max_tries: int = Field(default=2, ge=1, le=5)
+    render_retry_delay_seconds: int = Field(default=10, ge=1, le=300)
 
     @property
     def is_production(self) -> bool:

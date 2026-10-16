@@ -5,11 +5,9 @@ name `render_resume_pdf`, kwargs `version_id`, `user_id`, `template`.
 
 Failure handling deserves a note. A LaTeX failure is almost never transient --
 the same source compiled again fails identically -- so this task does not retry
-on `LatexCompileError`. Retrying would burn three attempts and delay the error
-reaching the user by a minute, for nothing. Infrastructure failures (Mongo
-unreachable, disk full) *are* transient and are allowed to propagate so ARQ
-retries them. Distinguishing the two is the whole job of the except clauses
-below.
+on `LatexCompileError`. Infrastructure failures use ARQ's explicit delayed
+retry signal up to the configured attempt limit. Distinguishing the two is the
+whole job of the except clauses below.
 """
 
 from __future__ import annotations
@@ -18,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
+from arq import Retry
 from pymongo import ReturnDocument
 
 from worker import db, storage
@@ -52,7 +51,14 @@ async def render_resume_pdf(
     settings = get_settings()
     started = datetime.now(UTC)
 
-    await _mark_job(version_id, status="rendering", started_at=started)
+    await _mark_job(
+        version_id,
+        status="rendering",
+        started_at=started,
+        finished_at=None,
+        error_message=None,
+        latex_log_tail=None,
+    )
 
     try:
         version = await _load_version(version_id, user_id)
@@ -105,12 +111,17 @@ async def render_resume_pdf(
             status="succeeded",
             finished_at=finished,
             duration_ms=result.duration_ms,
+            error_message=None,
+            latex_log_tail=None,
         )
 
         # Scoring is chained rather than inlined: it is a separate unit of work
         # with its own failure mode, and a scoring bug must not invalidate a
         # PDF that compiled cleanly.
-        await _enqueue_score(ctx, version_id=version_id, user_id=user_id)
+        try:
+            await _enqueue_score(ctx, version_id=version_id, user_id=user_id)
+        except Exception as exc:  # noqa: BLE001 - render success is independent of ATS queue health
+            log.error("render.score_enqueue_failed", error_type=type(exc).__name__)
 
         log.info(
             "render.succeeded",
@@ -131,7 +142,9 @@ async def render_resume_pdf(
     except LatexCompileError as exc:
         # Permanent: same input, same failure. Swallowed deliberately so ARQ
         # does not retry, with the log tail persisted for the user-facing error.
-        log.error("render.latex_failed", error=str(exc), log_tail=exc.log_tail[:400])
+        # The compiler log can echo resume content, so keep it in the
+        # owner-scoped job record but never copy it into shared worker logs.
+        log.error("render.latex_failed", error_type=type(exc).__name__)
         await _mark_job(
             version_id,
             status="failed",
@@ -142,7 +155,7 @@ async def render_resume_pdf(
         return {"ok": False, "error": str(exc), "retryable": False}
 
     except RenderTaskError as exc:
-        log.error("render.permanent_failure", error=str(exc))
+        log.error("render.permanent_failure", error_type=type(exc).__name__)
         await _mark_job(
             version_id,
             status="failed",
@@ -152,13 +165,25 @@ async def render_resume_pdf(
         return {"ok": False, "error": str(exc), "retryable": False}
 
     except Exception as exc:
-        # Infrastructure. Record it, then re-raise so ARQ's retry applies --
-        # a Mongo failover or a full disk is exactly what retries are for.
-        log.exception("render.infrastructure_failure")
+        # ARQ retries only after its explicit Retry signal; ordinary exceptions
+        # are terminal. Keep the record queued while another configured attempt
+        # remains, then persist a terminal failure so polling cannot wait forever.
+        log.error("render.infrastructure_failure", error_type=type(exc).__name__)
+        max_tries = settings.render_max_tries
+        job_try = ctx.get("job_try", 1)
+        current_try = job_try if isinstance(job_try, int) and job_try > 0 else max_tries
+        if current_try < max_tries:
+            await _mark_job(
+                version_id,
+                status="queued",
+                error_message="Temporary render infrastructure failure; retry scheduled.",
+            )
+            raise Retry(defer=settings.render_retry_delay_seconds) from exc
         await _mark_job(
             version_id,
-            status="queued",  # back to queued: a retry is coming
-            error_message=f"infrastructure: {exc}",
+            status="failed",
+            finished_at=datetime.now(UTC),
+            error_message="Render infrastructure failed after the configured retries.",
         )
         raise
 

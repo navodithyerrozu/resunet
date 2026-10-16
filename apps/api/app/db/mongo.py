@@ -134,6 +134,16 @@ INDEX_PLAN: dict[Collections, list[IndexModel]] = {
         IndexModel([("user_id", ASCENDING)], unique=True, name="uq_user"),
     ],
     Collections.BULLETS: [
+        IndexModel(
+            [
+                ("user_id", ASCENDING),
+                ("thread_id", ASCENDING),
+                ("generation_achievement_id", ASCENDING),
+            ],
+            unique=True,
+            partialFilterExpression={"generation_achievement_id": {"$type": "string"}},
+            name="uq_bullet_generation_achievement",
+        ),
         # Editor loads all bullets for one experience entry.
         IndexModel(
             [("user_id", ASCENDING), ("profile_entry_id", ASCENDING), ("created_at", DESCENDING)],
@@ -161,9 +171,7 @@ INDEX_PLAN: dict[Collections, list[IndexModel]] = {
             [("user_id", ASCENDING), ("updated_at", DESCENDING)],
             name="ix_user_updated",
         ),
-        IndexModel(
-            [("user_id", ASCENDING), ("status", ASCENDING)], name="ix_user_status"
-        ),
+        IndexModel([("user_id", ASCENDING), ("status", ASCENDING)], name="ix_user_status"),
         # Resuming an in-flight agent conversation by thread.
         IndexModel(
             [("thread_id", ASCENDING)],
@@ -208,6 +216,12 @@ INDEX_PLAN: dict[Collections, list[IndexModel]] = {
         ),
         IndexModel([("status", ASCENDING), ("posted_at", DESCENDING)], name="ix_status_posted"),
         IndexModel([("company_name", ASCENDING)], name="ix_company"),
+        IndexModel(
+            [("dedupe_hash", ASCENDING)],
+            unique=True,
+            name="uq_job_content_hash",
+            partialFilterExpression={"dedupe_hash": {"$type": "string"}},
+        ),
         # Job search box.
         IndexModel(
             [("title", "text"), ("company_name", "text"), ("description_raw", "text")],
@@ -257,6 +271,15 @@ INDEX_PLAN: dict[Collections, list[IndexModel]] = {
         IndexModel(
             [("resume_version_id", ASCENDING), ("computed_at", DESCENDING)],
             name="ix_version_computed",
+        ),
+        # Worker idempotency keys are present only on new score documents. A
+        # partial index keeps pre-existing history valid while making future
+        # queue replays safe.
+        IndexModel(
+            [("idempotency_key", ASCENDING)],
+            unique=True,
+            name="uq_ats_idempotency_key",
+            partialFilterExpression={"idempotency_key": {"$type": "string"}},
         ),
         IndexModel([("user_id", ASCENDING), ("computed_at", DESCENDING)], name="ix_user_computed"),
         # Latest score for a (version, job) pair -- the compare view.

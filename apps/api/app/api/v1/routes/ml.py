@@ -9,7 +9,7 @@ b = 0
 learning_rate = 0.01
 epochs = 1000
 
-for epoch in range(epochs):
+for _epoch in range(epochs):
 
     # Prediction
     y_pred = w * X + b

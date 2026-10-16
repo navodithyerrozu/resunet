@@ -15,9 +15,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import structlog
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Frame, Page
 
-from worker import humanize
 from worker.adapters.base import (
     AdapterError,
     FieldMapping,
@@ -69,15 +69,13 @@ class GreenhouseAdapter:
                 f"posting returned HTTP {response.status}",
                 retryable=response.status >= 500,
             )
-        await humanize.read_pause(1200)
 
         # Company pages put the form behind an "Apply" button.
         apply_button = session.page.locator(
             "a:has-text('Apply'), button:has-text('Apply for this job')"
         ).first
         if await apply_button.is_visible(timeout=3000):
-            await humanize.click_naturally(session.page, apply_button)
-            await humanize.pause(1.0, 2.0)
+            await apply_button.click()
 
     async def login(self, session: BrowserSession, login: BoardLogin) -> None:
         """Not used. Greenhouse applications are anonymous."""
@@ -112,7 +110,7 @@ class GreenhouseAdapter:
                         retryable=False,
                     )
                 continue
-            await humanize.type_like_human(locator, value)
+            await locator.fill(value)
             mappings.append(
                 FieldMapping(
                     selector=selector,
@@ -132,7 +130,7 @@ class GreenhouseAdapter:
                 continue
             locator = form.locator(selector).first
             if await locator.is_visible(timeout=1500):
-                await humanize.type_like_human(locator, url)
+                await locator.fill(url)
                 mappings.append(
                     FieldMapping(
                         selector=selector,
@@ -146,7 +144,7 @@ class GreenhouseAdapter:
         if payload.cover_letter_text:
             box = form.locator("#cover_letter_text, textarea[name*='cover_letter']").first
             if await box.is_visible(timeout=2000):
-                await humanize.type_like_human(box, payload.cover_letter_text)
+                await box.fill(payload.cover_letter_text)
                 mappings.append(
                     FieldMapping(
                         selector="#cover_letter_text",
@@ -179,7 +177,6 @@ class GreenhouseAdapter:
             await form.locator(f"text={pdf_path.name}").first.wait_for(timeout=15_000)
         except Exception:  # noqa: BLE001
             logger.warning("greenhouse.upload_unconfirmed", filename=pdf_path.name)
-        await humanize.pause(0.6, 1.4)
 
     async def answer_questions(
         self, session: BrowserSession, answers: dict[str, str]
@@ -194,7 +191,7 @@ class GreenhouseAdapter:
         button = form.locator("#submit_app, button:has-text('Submit Application')").first
         if not await button.is_visible(timeout=5000):
             raise AdapterError("submit", "submit button not found", retryable=False)
-        await humanize.click_naturally(session.page, button)
+        await button.click()
         # Waiting for network idle rather than a fixed sleep: the confirmation is
         # rendered after an XHR, and a fixed wait either races it or wastes time.
         await session.page.wait_for_load_state("networkidle", timeout=30_000)
@@ -207,7 +204,8 @@ class GreenhouseAdapter:
                 if await locator.is_visible(timeout=4000):
                     evidence.confirmation_text = (await locator.inner_text())[:1000]
                     return evidence
-            except Exception:  # noqa: BLE001
+            except PlaywrightError as exc:
+                logger.debug("greenhouse.confirmation_probe_failed", error_type=type(exc).__name__)
                 continue
         # No positive confirmation. Reported as such rather than assumed either
         # way -- the caller decides, and an ambiguous outcome is flagged for a

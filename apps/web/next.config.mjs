@@ -1,3 +1,8 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const webDirectory = path.dirname(fileURLToPath(import.meta.url));
+
 /**
  * Next.js configuration.
  *
@@ -10,6 +15,11 @@ const nextConfig = {
   // has to run it through its own compiler. Without this the build fails on the
   // first `import type` it cannot parse.
   transpilePackages: ["@resunet/shared"],
+
+  // Emit a compact production server. The workspace root is included so the
+  // standalone output can resolve the shared package in the monorepo image.
+  output: "standalone",
+  outputFileTracingRoot: path.join(webDirectory, "../.."),
 
   eslint: {
     // Lint is a separate CI step. Folding it into `next build` means a style

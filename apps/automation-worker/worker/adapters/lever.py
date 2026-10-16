@@ -12,9 +12,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import structlog
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
-from worker import humanize
 from worker.adapters.base import (
     AdapterError,
     FieldMapping,
@@ -47,7 +47,6 @@ class LeverAdapter:
                 f"posting returned HTTP {response.status}",
                 retryable=response.status >= 500,
             )
-        await humanize.read_pause(1000)
 
         if not await session.page.locator("input[name='name']").first.is_visible(timeout=8000):
             raise AdapterError(
@@ -88,7 +87,7 @@ class LeverAdapter:
                         retryable=False,
                     )
                 continue
-            await humanize.type_like_human(locator, value)
+            await locator.fill(value)
             mappings.append(
                 FieldMapping(
                     selector=selector,
@@ -102,7 +101,7 @@ class LeverAdapter:
         if payload.cover_letter_text:
             box = page.locator("textarea[name='comments']").first
             if await box.is_visible(timeout=2000):
-                await humanize.type_like_human(box, payload.cover_letter_text)
+                await box.fill(payload.cover_letter_text)
                 mappings.append(
                     FieldMapping(
                         selector="textarea[name='comments']",
@@ -125,7 +124,6 @@ class LeverAdapter:
         # Lever parses the resume server-side and pre-fills fields from it. That
         # parse can overwrite what was already typed, so the wait here is not
         # cosmetic -- filling before it completes loses data silently.
-        await humanize.pause(2.0, 3.5)
 
     async def answer_questions(
         self, session: BrowserSession, answers: dict[str, str]
@@ -140,7 +138,7 @@ class LeverAdapter:
         ).first
         if not await button.is_visible(timeout=5000):
             raise AdapterError("submit", "submit button not found", retryable=False)
-        await humanize.click_naturally(session.page, button)
+        await button.click()
         await session.page.wait_for_load_state("networkidle", timeout=30_000)
 
     async def verify_submitted(self, page: Page) -> SubmissionEvidence:
@@ -154,8 +152,8 @@ class LeverAdapter:
             banner = page.locator("text=Thank you").first
             if await banner.is_visible(timeout=4000):
                 evidence.confirmation_text = (await banner.inner_text())[:1000]
-        except Exception:  # noqa: BLE001
-            pass
+        except PlaywrightError as exc:
+            logger.debug("lever.confirmation_probe_failed", error_type=type(exc).__name__)
         return evidence
 
 

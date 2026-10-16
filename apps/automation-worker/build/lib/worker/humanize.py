@@ -24,6 +24,7 @@ import asyncio
 import random
 
 import structlog
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 
 logger = structlog.get_logger(__name__)
@@ -94,8 +95,8 @@ async def scroll_to(page: Page, locator: Locator) -> None:
         await locator.scroll_into_view_if_needed(timeout=4000)
         await page.mouse.wheel(0, random.randint(-70, 70))
         await pause(0.2, 0.6)
-    except Exception:  # noqa: BLE001 - cosmetic; never fail a submission over it
-        pass
+    except PlaywrightError as exc:
+        logger.debug("humanize.scroll_failed", error_type=type(exc).__name__)
 
 
 async def move_mouse_naturally(page: Page, locator: Locator) -> None:
@@ -113,8 +114,8 @@ async def move_mouse_naturally(page: Page, locator: Locator) -> None:
         target_y = box["y"] + box["height"] / 2 + random.uniform(-4, 4)
         await page.mouse.move(target_x, target_y, steps=random.randint(6, 14))
         await pause(0.08, 0.25)
-    except Exception:  # noqa: BLE001
-        pass
+    except PlaywrightError as exc:
+        logger.debug("humanize.mouse_move_failed", error_type=type(exc).__name__)
 
 
 async def click_naturally(page: Page, locator: Locator) -> None:

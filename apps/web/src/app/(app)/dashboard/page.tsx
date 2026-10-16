@@ -243,7 +243,7 @@ export default async function DashboardPage() {
           {recommendations.length === 0 ? (
             <EmptyState
               title="No matches yet"
-              body="Job matching runs once there is a scored resume to match against."
+              body="Save a job description to compare it with the skills and experience in your profile."
             />
           ) : (
             <ul className="divide-y divide-line">

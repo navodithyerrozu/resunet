@@ -93,12 +93,12 @@ def extract_text(pdf_bytes: bytes) -> ExtractionResult:
         reader = PdfReader(io.BytesIO(pdf_bytes))
         pages = [page.extract_text() or "" for page in reader.pages]
     except Exception as exc:  # noqa: BLE001 - see docstring
-        logger.warning("ats.extraction_failed", error=str(exc))
+        logger.warning("ats.extraction_failed", error_type=type(exc).__name__)
         return ExtractionResult(
             text="",
             page_count=0,
             confidence=0.0,
-            problems=[f"PDF could not be parsed at all: {exc}"],
+            problems=["PDF could not be parsed. Render the resume again and retry."],
         )
 
     raw = "\n".join(pages)
@@ -188,7 +188,11 @@ def score_contact_completeness(text: str) -> tuple[float, str]:
     has_phone = bool(_PHONE.search(head))
     score = 100.0 if (has_email and has_phone) else (60.0 if has_email else 0.0)
     missing = [n for n, ok in (("email", has_email), ("phone", has_phone)) if not ok]
-    detail = "Contact details found." if not missing else f"Missing near the top: {', '.join(missing)}."
+    detail = (
+        "Contact details found."
+        if not missing
+        else f"Missing near the top: {', '.join(missing)}."
+    )
     return score, detail
 
 
@@ -205,8 +209,14 @@ def score_length_density(text: str, page_count: int) -> tuple[float, str]:
     if 400 <= per_page <= 700:
         return 100.0, f"{per_page:.0f} words per page is well within range."
     if per_page < 400:
-        return round(max(0.0, per_page / 400 * 100), 1), f"Sparse at {per_page:.0f} words per page."
-    return round(max(0.0, 100 - (per_page - 700) / 10), 1), f"Dense at {per_page:.0f} words per page."
+        return (
+            round(max(0.0, per_page / 400 * 100), 1),
+            f"Sparse at {per_page:.0f} words per page.",
+        )
+    return (
+        round(max(0.0, 100 - (per_page - 700) / 10), 1),
+        f"Dense at {per_page:.0f} words per page.",
+    )
 
 
 def score_date_consistency(text: str) -> tuple[float, str]:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field
 
@@ -30,7 +31,7 @@ class ThreadKind(StrEnum):
 
 class ThreadStatus(StrEnum):
     ACTIVE = "active"
-    AWAITING_USER = "awaiting_user"    # graph interrupted for input
+    AWAITING_USER = "awaiting_user"  # graph interrupted for input
     COMPLETED = "completed"
     ABANDONED = "abandoned"
     FAILED = "failed"
@@ -63,7 +64,8 @@ class AgentThread(MongoModel):
 
     bullets_produced: int = Field(default=0, ge=0)
     bullets_flagged: int = Field(
-        default=0, ge=0,
+        default=0,
+        ge=0,
         description="Bullets that exhausted the repair budget. A rising ratio here is "
         "the signal that prompts or the model need attention.",
     )
@@ -90,7 +92,8 @@ class GenerateStartRequest(ApiModel):
     )
     target_job_id: PyObjectId | None = None
     seed_notes: str | None = Field(
-        default=None, max_length=8000,
+        default=None,
+        max_length=8000,
         description="Raw brain-dump to mine for achievements. If omitted, the agent "
         "falls back to the entry's stored `raw_notes`.",
     )
@@ -115,6 +118,17 @@ class BulletProposal(ApiModel):
     violations: list[XYZViolation] = Field(default_factory=list)
     repair_attempts: int = Field(default=0, ge=0)
     accepted: bool = Field(description="True when the deterministic validator passed.")
+    bullet_id: PyObjectId | None = Field(
+        default=None, description="Persisted proposal ID, present once generation is complete."
+    )
+    decision: Literal["accepted", "revised", "rejected"] | None = None
+
+
+class ProposalDecision(ApiModel):
+    """User decision for a persisted generated proposal."""
+
+    action: str = Field(pattern="^(accept|reject|revise)$")
+    draft: BulletDraft | None = None
 
 
 class GenerateTurnResponse(ApiModel):

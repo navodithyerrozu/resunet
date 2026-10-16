@@ -19,9 +19,9 @@ import re
 from pathlib import Path
 
 import structlog
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Frame, Locator, Page
 
-from worker import humanize
 from worker.adapters.base import (
     AdapterError,
     FieldMapping,
@@ -79,7 +79,6 @@ class GenericAdapter:
                 f"posting returned HTTP {response.status}",
                 retryable=response.status >= 500,
             )
-        await humanize.read_pause(1500)
 
         apply_button = session.page.locator(
             "a:has-text('Apply'), button:has-text('Apply'), "
@@ -87,10 +86,10 @@ class GenericAdapter:
         ).first
         try:
             if await apply_button.is_visible(timeout=3000):
-                await humanize.click_naturally(session.page, apply_button)
+                await apply_button.click()
                 await session.page.wait_for_load_state("domcontentloaded", timeout=20_000)
-        except Exception:  # noqa: BLE001 - many postings are already the form
-            pass
+        except PlaywrightError as exc:
+            logger.debug("generic.apply_navigation_probe_failed", error_type=type(exc).__name__)
 
         if not await _has_form(session.page):
             raise AdapterError(
@@ -139,7 +138,7 @@ class GenericAdapter:
                     raise UnmappedFieldError("fill_fields", logical)
                 continue
             locator, selector, confidence = resolved
-            await humanize.type_like_human(locator, value)
+            await locator.fill(value)
             mappings.append(
                 FieldMapping(
                     selector=selector,
@@ -153,7 +152,7 @@ class GenericAdapter:
         combined = await _resolve_field(session.page, "full_name")
         if combined is not None and not any(m.label == "first_name" for m in mappings):
             locator, selector, confidence = combined
-            await humanize.type_like_human(locator, applicant.full_name)
+            await locator.fill(applicant.full_name)
             mappings.append(
                 FieldMapping(
                     selector=selector,
@@ -168,7 +167,7 @@ class GenericAdapter:
             box = session.page.locator("textarea").first
             try:
                 if await box.is_visible(timeout=2000):
-                    await humanize.type_like_human(box, payload.cover_letter_text)
+                    await box.fill(payload.cover_letter_text)
                     mappings.append(
                         FieldMapping(
                             selector="textarea",
@@ -180,8 +179,8 @@ class GenericAdapter:
                             confidence=0.5,
                         )
                     )
-            except Exception:  # noqa: BLE001
-                pass
+            except PlaywrightError as exc:
+                logger.debug("generic.cover_letter_probe_failed", error_type=type(exc).__name__)
 
         return mappings
 
@@ -197,7 +196,6 @@ class GenericAdapter:
             raise
         except Exception as exc:
             raise AdapterError("upload_resume", f"resume upload failed: {exc}") from exc
-        await humanize.pause(0.8, 1.8)
 
     async def answer_questions(
         self, session: BrowserSession, answers: dict[str, str]
@@ -211,11 +209,14 @@ class GenericAdapter:
         ).first
         if not await button.is_visible(timeout=5000):
             raise AdapterError("submit", "submit control not found", retryable=False)
-        await humanize.click_naturally(session.page, button)
+        await button.click()
         try:
             await session.page.wait_for_load_state("networkidle", timeout=30_000)
-        except Exception:  # noqa: BLE001 - some forms keep a socket open
-            await humanize.pause(2.0, 3.0)
+        except PlaywrightError as exc:
+            logger.warning(
+                "generic.submit_idle_wait_failed",
+                error_type=type(exc).__name__,
+            )
 
     async def verify_submitted(self, page: Page) -> SubmissionEvidence:
         evidence = SubmissionEvidence(final_url=page.url)
@@ -250,7 +251,7 @@ async def fill_by_label(
         if locator is None:
             logger.warning("generic.question_unmatched", question=question[:80])
             continue
-        await humanize.type_like_human(locator, answer)
+        await locator.fill(answer)
         mappings.append(
             FieldMapping(
                 selector=f"label~={question[:40]!r}",
@@ -291,9 +292,9 @@ async def _resolve_field(
 
     # 3. associated <label> text.
     for synonym in _LABEL_SYNONYMS.get(logical, ()):
-        locator = await _locator_for_label_text(root, synonym)
-        if locator is not None:
-            return locator, f"label~={synonym!r}", 0.7
+        labeled_locator = await _locator_for_label_text(root, synonym)
+        if labeled_locator is not None:
+            return labeled_locator, f"label~={synonym!r}", 0.7
 
     # 4. placeholder text -- weakest, since placeholders are often examples
     #    rather than descriptions ("e.g. Jane").
@@ -317,8 +318,8 @@ async def _locator_for_label_text(root: Page | Frame, text: str) -> Locator | No
         locator = root.get_by_label(re.compile(re.escape(text), re.IGNORECASE)).first
         if await _usable(locator):
             return locator
-    except Exception:  # noqa: BLE001
-        pass
+    except PlaywrightError as exc:
+        logger.debug("generic.label_locator_probe_failed", error_type=type(exc).__name__)
     return None
 
 

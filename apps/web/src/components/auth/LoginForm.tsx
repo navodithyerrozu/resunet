@@ -27,7 +27,15 @@ function safeDestination(next: string | null): string {
   return next;
 }
 
-export function LoginForm({ next, expired }: { next: string | null; expired: boolean }) {
+export function LoginForm({
+  next,
+  expired,
+  revocationFailed,
+}: {
+  next: string | null;
+  expired: boolean;
+  revocationFailed: boolean;
+}) {
   const router = useRouter();
   const emailId = useId();
   const passwordId = useId();
@@ -81,6 +89,15 @@ export function LoginForm({ next, expired }: { next: string | null; expired: boo
       {expired ? (
         <p className="rounded-card border border-warn/25 bg-warn-wash px-3 py-2 text-sm text-warn">
           Your session expired. Sign in to pick up where you left off.
+        </p>
+      ) : null}
+      {revocationFailed ? (
+        <p
+          role="alert"
+          className="rounded-card border border-warn/25 bg-warn-wash px-3 py-2 text-sm text-warn"
+        >
+          You are signed out on this device, but ResuNet could not confirm that other sessions
+          were revoked. They may remain active until the server is available to complete sign-out.
         </p>
       ) : null}
 

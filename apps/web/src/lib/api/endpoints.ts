@@ -3,14 +3,19 @@ import "server-only";
 import { apiFetch, apiFetchBinary } from "./client";
 
 import type {
+  CareerProfile,
   ATSScore,
   Application,
+  ApplicationCreate,
   ApplicationStatus,
   ApplicationSummary,
   Bullet,
   GenerateStartRequest,
   GenerateTurnResponse,
+  ProposalDecision,
   JobSummary,
+  JobIngestRequest,
+  Job,
   Page,
   RenderJob,
   RenderRequest,
@@ -20,6 +25,7 @@ import type {
   ResumeUpdate,
   ResumeVersion,
   ScoreRequest,
+  ScoreSubmission,
   SkillCount,
   TokenPair,
   UserCreate,
@@ -177,17 +183,62 @@ export function sendGenerationTurn(
   );
 }
 
+export function getGenerationSession(resumeId: string): Promise<GenerateTurnResponse> {
+  return apiFetch<GenerateTurnResponse>(`/resumes/${encodeURIComponent(resumeId)}/generation`, {
+    tags: [`resume:${resumeId}`],
+  });
+}
+
+export function decideGenerationProposal(
+  threadId: string,
+  bulletId: string,
+  payload: ProposalDecision,
+): Promise<Bullet> {
+  return apiFetch<Bullet>(
+    `/resumes/generate/${encodeURIComponent(threadId)}/proposals/${encodeURIComponent(bulletId)}/decision`,
+    { method: "POST", body: payload },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ATS
 // ---------------------------------------------------------------------------
 
-export function scoreVersion(payload: ScoreRequest): Promise<ATSScore> {
-  return apiFetch<ATSScore>("/ats/score", { method: "POST", body: payload });
+export function scoreVersion(payload: ScoreRequest): Promise<ScoreSubmission> {
+  return apiFetch<ScoreSubmission>("/ats/score", { method: "POST", body: payload });
+}
+
+export function listVersionScores(
+  versionId: string,
+  params: { limit?: number; offset?: number; jobId?: string | null } = {},
+): Promise<Page<ATSScore>> {
+  return apiFetch<Page<ATSScore>>(`/ats/scores/${encodeURIComponent(versionId)}`, {
+    query: {
+      limit: params.limit ?? 20,
+      offset: params.offset ?? 0,
+      jobId: params.jobId ?? undefined,
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Applications
 // ---------------------------------------------------------------------------
+
+export function createApplication(payload: ApplicationCreate): Promise<Application> {
+  return apiFetch<Application>("/applications", { method: "POST", body: payload });
+}
+
+export function updateApplicationStatus(
+  applicationId: string,
+  status: ApplicationStatus,
+  note?: string,
+): Promise<Application> {
+  return apiFetch<Application>(`/applications/${encodeURIComponent(applicationId)}/status`, {
+    method: "PATCH",
+    body: { status, note },
+  });
+}
 
 export function listApplications(
   params: { status?: ApplicationStatus; limit?: number; offset?: number } = {},
@@ -241,12 +292,20 @@ export function funnelStats(): Promise<Record<string, number>> {
 // ---------------------------------------------------------------------------
 
 export function listJobs(
-  params: { limit?: number; offset?: number } = {},
+  params: { limit?: number; offset?: number; status?: "open" | "closed" | "unknown" } = {},
 ): Promise<Page<JobSummary>> {
   return apiFetch<Page<JobSummary>>("/jobs", {
-    query: { limit: params.limit ?? 20, offset: params.offset ?? 0 },
+    query: {
+      limit: params.limit ?? 20,
+      offset: params.offset ?? 0,
+      ...(params.status ? { status: params.status } : {}),
+    },
     tags: ["jobs"],
   });
+}
+
+export function saveJob(payload: JobIngestRequest): Promise<Job> {
+  return apiFetch<Job>("/jobs", { method: "POST", body: payload });
 }
 
 export function topRecommendations(): Promise<JobSummary[]> {
@@ -255,4 +314,16 @@ export function topRecommendations(): Promise<JobSummary[]> {
 
 export function listProfileSkills(): Promise<SkillCount[]> {
   return apiFetch<SkillCount[]>("/profile/skills", { tags: ["profile"] });
+}
+
+export function getCareerProfile(): Promise<CareerProfile> {
+  return apiFetch<CareerProfile>("/profile", { tags: ["profile"] });
+}
+
+export function saveCareerProfile(profile: CareerProfile): Promise<CareerProfile> {
+  return apiFetch<CareerProfile>("/profile", {
+    method: "PUT",
+    body: profile,
+    tags: ["profile"],
+  });
 }

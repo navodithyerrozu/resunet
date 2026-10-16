@@ -17,12 +17,18 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /srv/automation-worker
 
 COPY apps/automation-worker/pyproject.toml ./
-RUN pip install --upgrade pip && pip install -e "."
-
-COPY apps/automation-worker/ ./
+COPY apps/automation-worker/worker ./worker
+RUN pip install --upgrade pip && pip install .
 
 # The base image ships a `pwuser` with the browser sandbox configured.
-RUN mkdir -p /srv/storage/traces && chown -R pwuser:pwuser /srv
+RUN groupadd --system --gid 10003 renderdata \
+    && usermod --append --groups renderdata pwuser \
+    && mkdir -p /srv/storage/renders /srv/storage/traces \
+    && chown -R pwuser:renderdata /srv \
+    && chmod 2775 /srv/storage/renders
 USER pwuser
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD ["arq", "worker.main.WorkerSettings", "--check"]
 
 CMD ["arq", "worker.main.WorkerSettings"]

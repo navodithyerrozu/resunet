@@ -25,12 +25,17 @@ submission. So it is escalated to a human with a screenshot attached.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
+from math import ceil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from uuid import uuid4
 
 import structlog
+from bson import ObjectId
 from playwright.async_api import Browser
+from pymongo import ReturnDocument
 
 from worker import browser as browser_mod
 from worker import db, detect, retry
@@ -50,6 +55,7 @@ async def submit_application(
     *,
     user_id: str | None = None,
     approved: bool = False,
+    attempt_number: int | None = None,
 ) -> dict[str, Any]:
     """Submit one job application. Registered as an ARQ task.
 
@@ -75,13 +81,15 @@ async def submit_application(
     settings = get_settings()
     database = db.db()
     redis = ctx["redis"]
-    attempt_number = int(ctx.get("job_try", 1))
+    attempt_number = max(1, attempt_number or int(ctx.get("job_try", 1)))
+    app_oid = _object_id(application_id)
+    queued_user_oid = _object_id(user_id) if user_id is not None else None
 
     log = logger.bind(
         application_id=application_id, attempt=attempt_number, approved=approved
     )
 
-    application = await database.applications.find_one({"_id": application_id})
+    application = await database.applications.find_one({"_id": app_oid})
     if application is None:
         log.error("submit.application_not_found")
         return _result("permanent_failure", "application not found")
@@ -91,7 +99,7 @@ async def submit_application(
         log.info("submit.already_terminal", status=application.get("status"))
         return _result("success", "already in a terminal state; nothing to do")
 
-    if user_id is not None and application.get("user_id") != user_id:
+    if queued_user_oid is not None and _object_id(application.get("user_id")) != queued_user_oid:
         # Refuse rather than proceed on the stored owner. If these disagree, the
         # queue payload does not describe reality, and the next irreversible
         # action would be taken on behalf of the wrong person.
@@ -102,14 +110,27 @@ async def submit_application(
         )
         return _result("permanent_failure", "application does not belong to the requesting user")
 
-    job = await database.jobs.find_one({"_id": application["job_id"]})
+    job = await database.jobs.find_one({"_id": _object_id(application["job_id"])})
     if job is None:
         return _result("permanent_failure", "job posting record missing")
+    if application.get("method") != "automated" or not job.get("supports_automation"):
+        return _result("permanent_failure", "application or job is not enabled for automation")
 
     board = (job.get("source") or {}).get("board") or "generic"
     job_url = (job.get("source") or {}).get("url") or job.get("url")
     if not job_url:
         return _result("permanent_failure", "job has no application URL")
+    if not settings.is_application_url_authorized(job_url):
+        await _record_attempt(
+            database,
+            application_id,
+            attempt_number,
+            outcome="permanent_failure",
+            step="authorization",
+            error="application hostname is not explicitly authorized for this worker",
+        )
+        await _set_status(database, application_id, "failed")
+        return _result("permanent_failure", "application hostname is not authorized")
 
     # 1. Circuit breaker, before spending anything.
     try:
@@ -121,27 +142,42 @@ async def submit_application(
             outcome="retryable_failure", step="preflight",
             error=f"board circuit open; deferred {exc.retry_after_seconds:.0f}s",
         )
-        return _result("deferred", str(exc), defer_seconds=exc.retry_after_seconds)
+        if await _enqueue_deferred(
+            ctx, application_id, str(application["user_id"]), approved,
+            attempt_number, exc.retry_after_seconds,
+        ):
+            return _result("deferred", str(exc), defer_seconds=exc.retry_after_seconds)
+        await _mark_defer_failure(database, application_id, attempt_number)
+        return _result("retryable_failure", "could not reschedule while board circuit was open")
 
     # 2. Per-board pacing.
     wait = await retry.seconds_until_board_available(redis, board)
     if wait > 0:
         log.info("submit.paced", board=board, defer_seconds=wait)
-        return _result("deferred", f"board pacing: {wait:.0f}s", defer_seconds=wait)
+        if await _enqueue_deferred(
+            ctx, application_id, str(application["user_id"]), approved, attempt_number, wait
+        ):
+            return _result("deferred", f"board pacing: {wait:.0f}s", defer_seconds=wait)
+        await _mark_defer_failure(database, application_id, attempt_number)
+        return _result("retryable_failure", "could not reschedule after board pacing")
 
-    version = await database.resume_versions.find_one({"_id": application["resume_version_id"]})
+    version = await database.resume_versions.find_one(
+        {"_id": _object_id(application["resume_version_id"])}
+    )
     if version is None or not version.get("pdf_path"):
         return _result("permanent_failure", "no rendered PDF for this resume version")
 
     pdf_path = Path(version["pdf_path"])
-    if not pdf_path.exists():
+    if not await asyncio.to_thread(pdf_path.exists):
         # The render succeeded once but the artifact is gone -- a volume was
         # recreated or a retention job reaped it. Re-rendering is the fix, so
         # this is retryable at a higher level, not here.
         return _result("permanent_failure", "rendered PDF is missing from storage")
 
-    profile = await database.career_profiles.find_one({"user_id": application["user_id"]})
-    user = await database.users.find_one({"_id": application["user_id"]})
+    profile = await database.career_profiles.find_one(
+        {"user_id": _object_id(application["user_id"])}
+    )
+    user = await database.users.find_one({"_id": _object_id(application["user_id"])})
     if profile is None or user is None:
         return _result("permanent_failure", "user profile is incomplete")
 
@@ -165,19 +201,38 @@ async def submit_application(
     login = None
     if adapter.requires_login:
         credential = await database.board_credentials.find_one(
-            {"user_id": application["user_id"], "board": board, "status": "active"}
+            {"user_id": _object_id(application["user_id"]), "board": board, "is_valid": True}
         )
         if credential is None:
+            await _set_status(database, application_id, "needs_review")
             return _result("needs_human", f"no stored credentials for board {board!r}")
         try:
             login = decrypt_login(credential["encrypted_blob"])
         except CredentialError as exc:
             log.error("submit.credentials_unusable")
+            await _set_status(database, application_id, "needs_review")
             return _result("needs_human", str(exc))
         secrets = [login.password, login.username]
 
-    await retry.mark_board_hit(redis, board)
-    await _set_status(database, application_id, "submitting")
+    claimed = await _claim_submission(database, app_oid)
+    if claimed is None:
+        current_document = await database.applications.find_one(
+            {"_id": app_oid}, {"status": 1}
+        )
+        current_status = current_document.get("status") if current_document else "missing"
+        log.info("submit.claim_unavailable", current_status=current_status)
+        return _result(
+            "already_processing",
+            f"application was not queued when claimed (current status: {current_status})",
+        )
+    application = claimed
+
+    try:
+        await retry.mark_board_hit(redis, board)
+    except Exception as exc:  # noqa: BLE001 - no browser action has happened yet
+        log.error("submit.board_pacing_write_failed", error_type=type(exc).__name__)
+        await _mark_defer_failure(database, application_id, attempt_number)
+        return _result("retryable_failure", "could not update board pacing before submission")
 
     browser: Browser = ctx["browser"]
     step = "preflight"
@@ -234,24 +289,46 @@ async def submit_application(
                 # reason the fill is fingerprinted rather than just flagged.
                 step = "await_approval"
                 previous = _approved_fingerprint(application)
-                current = _fingerprint(mappings)
-                if previous is not None and previous != current:
+                current_fingerprint = _fingerprint(mappings)
+                approval_error = (
+                    "the previous approval evidence is missing; approve the current form"
+                    if previous is None
+                    else (
+                        "the form changed since it was approved; re-approval is required"
+                        if previous != current_fingerprint
+                        else None
+                    )
+                )
+                if approval_error is not None:
+                    has_reviewable_fields = bool(mappings)
                     await _record_attempt(
                         database, application_id, attempt_number,
                         outcome="needs_human", step=step,
-                        error="the form changed since it was approved; re-approval is "
-                              "required before submitting",
+                        error=approval_error,
                         screenshot_path=str(screenshot_path) if screenshot_path else None,
                         field_mappings=[_mapping_doc(m) for m in mappings],
                         final_url=session.page.url,
                     )
-                    await _set_status(database, application_id, "awaiting_approval")
+                    await _set_status(
+                        database,
+                        application_id,
+                        "awaiting_approval" if has_reviewable_fields else "needs_review",
+                    )
                     log.warning(
                         "submit.approval_stale",
-                        added=sorted(current - previous),
-                        removed=sorted(previous - current),
+                        evidence_missing=previous is None,
+                        added=(
+                            sorted(current_fingerprint - previous)
+                            if previous is not None
+                            else []
+                        ),
+                        removed=(
+                            sorted(previous - current_fingerprint)
+                            if previous is not None
+                            else []
+                        ),
                     )
-                    return _result("needs_human", "approval is stale; form changed")
+                    return _result("needs_human", approval_error)
 
             if require_approval:
                 step = "await_approval"
@@ -325,7 +402,11 @@ async def submit_application(
 
     except AdapterError as exc:
         message = redact(str(exc), secrets)
-        outcome = "retryable_failure" if exc.retryable else "permanent_failure"
+        outcome = (
+            "needs_human"
+            if exc.step in {"submit", "verify_submitted"}
+            else "retryable_failure" if exc.retryable else "permanent_failure"
+        )
         await retry.record_board_failure(redis, board)
         await _record_attempt(
             database, application_id, attempt_number,
@@ -334,12 +415,25 @@ async def submit_application(
         )
         log.warning("submit.adapter_error", step=exc.step, retryable=exc.retryable)
 
+        if exc.step in {"submit", "verify_submitted"}:
+            await _set_status(database, application_id, "needs_review")
+            return _result(
+                "needs_human",
+                "submission outcome is uncertain; verify manually before any retry",
+            )
+
         if exc.retryable and retry.should_retry(
             retry.AttemptOutcome.RETRYABLE_FAILURE, attempt_number
         ):
             delay = retry.backoff_seconds(attempt_number)
             await _set_status(database, application_id, "queued")
-            return _result("deferred", message, defer_seconds=delay)
+            if await _enqueue_deferred(
+                ctx, application_id, str(application["user_id"]), approved,
+                attempt_number + 1, delay,
+            ):
+                return _result("deferred", message, defer_seconds=delay)
+            await _mark_defer_failure(database, application_id, attempt_number + 1)
+            return _result("retryable_failure", "could not schedule the safe retry")
 
         await _set_status(database, application_id, "failed")
         return _result(outcome, message)
@@ -347,17 +441,36 @@ async def submit_application(
     except Exception as exc:  # noqa: BLE001 - last line of defence
         message = redact(str(exc), secrets)
         await retry.record_board_failure(redis, board)
-        # `exc_info` and not the message alone: an unexpected exception here is a
-        # bug in our code, and the traceback is the only way to find it.
-        log.exception("submit.unexpected_error", step=step)
+        # Playwright exceptions can include filled field values. Keep only the
+        # error class in shared logs; the redacted detail stays in the owner's
+        # attempt record for diagnosis.
+        log.error("submit.unexpected_error", step=step, error_type=type(exc).__name__)
         await _record_attempt(
             database, application_id, attempt_number,
-            outcome="retryable_failure", step=step, error=message[:2000],
+            outcome=(
+                "needs_human" if step in {"submit", "verify_submitted"}
+                else "retryable_failure"
+            ),
+            step=step,
+            error=message[:2000],
             screenshot_path=str(screenshot_path) if screenshot_path else None,
         )
+        if step in {"submit", "verify_submitted"}:
+            await _set_status(database, application_id, "needs_review")
+            return _result(
+                "needs_human",
+                "submission outcome is uncertain; verify manually before any retry",
+            )
         if retry.should_retry(retry.AttemptOutcome.RETRYABLE_FAILURE, attempt_number):
             await _set_status(database, application_id, "queued")
-            return _result("deferred", message, defer_seconds=retry.backoff_seconds(attempt_number))
+            delay = retry.backoff_seconds(attempt_number)
+            if await _enqueue_deferred(
+                ctx, application_id, str(application["user_id"]), approved,
+                attempt_number + 1, delay,
+            ):
+                return _result("deferred", message, defer_seconds=delay)
+            await _mark_defer_failure(database, application_id, attempt_number + 1)
+            return _result("retryable_failure", "could not schedule the safe retry")
         await _set_status(database, application_id, "failed")
         return _result("retryable_failure", message)
 
@@ -442,13 +555,26 @@ def _fingerprint(mappings: list[Any]) -> frozenset[tuple[str, str]]:
     return frozenset((m.label, m.value_preview) for m in mappings)
 
 
+async def _claim_submission(database: Any, application_id: ObjectId) -> dict[str, Any] | None:
+    """Atomically move one queued application into processing exactly once."""
+    result = await database.applications.find_one_and_update(
+        {"_id": application_id, "status": "queued"},
+        {
+            "$set": {
+                "status": "submitting",
+                "updated_at": datetime.now(UTC),
+            }
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    return cast(dict[str, Any] | None, result)
+
+
 def _approved_fingerprint(application: dict[str, Any]) -> frozenset[tuple[str, str]] | None:
     """The fill that was approved, or None if there is nothing to compare to.
 
-    None means "cannot verify", and the caller treats it as permission to proceed
-    rather than as a mismatch. That is the right call: the alternative deadlocks
-    an application whose attempt history was trimmed, and the human-approval step
-    itself has already happened.
+    None means "cannot verify". The caller must fail closed and request a fresh
+    review (or move to manual review if there are no fields to review).
     """
     for attempt in reversed(application.get("attempts") or []):
         if attempt.get("failed_step") == "await_approval":
@@ -495,7 +621,7 @@ async def _record_attempt(
         "started_at": datetime.now(UTC).isoformat(),
     }
     await database.applications.update_one(
-        {"_id": application_id},
+        {"_id": _object_id(application_id)},
         {"$push": {"attempts": attempt}, "$set": {"updated_at": datetime.now(UTC)}},
     )
 
@@ -506,7 +632,16 @@ async def _set_status(
     update: dict[str, Any] = {"status": status, "updated_at": datetime.now(UTC)}
     if submitted:
         update["submitted_at"] = datetime.now(UTC)
-    await database.applications.update_one({"_id": application_id}, {"$set": update})
+    await database.applications.update_one({"_id": _object_id(application_id)}, {"$set": update})
+
+
+def _object_id(value: Any) -> ObjectId:
+    """Accept queue string ids and BSON ids at the worker boundary."""
+    if isinstance(value, ObjectId):
+        return value
+    if isinstance(value, str) and ObjectId.is_valid(value):
+        return ObjectId(value)
+    raise ValueError("invalid MongoDB object id")
 
 
 def _result(
@@ -516,3 +651,48 @@ def _result(
     if defer_seconds is not None:
         result["defer_seconds"] = defer_seconds
     return result
+
+
+async def _enqueue_deferred(
+    ctx: dict[str, Any],
+    application_id: str,
+    user_id: str,
+    approved: bool,
+    attempt_number: int,
+    delay_seconds: float,
+) -> bool:
+    """Schedule exactly one deliberate retry independently of ARQ's retry loop."""
+    settings = get_settings()
+    try:
+        job = await ctx["redis"].enqueue_job(
+            "submit_application",
+            application_id=application_id,
+            user_id=user_id,
+            approved=approved,
+            attempt_number=attempt_number,
+            _job_id=f"submit:{application_id}:deferred:{uuid4().hex}",
+            _defer_by=max(1, ceil(delay_seconds)),
+            _queue_name=settings.automation_queue_name,
+        )
+    except Exception as exc:  # noqa: BLE001 - the caller records a recoverable failure
+        logger.error(
+            "submit.defer_enqueue_failed",
+            application_id=application_id,
+            error_type=type(exc).__name__,
+        )
+        return False
+    return job is not None
+
+
+async def _mark_defer_failure(
+    database: Any, application_id: str, attempt_number: int
+) -> None:
+    await _record_attempt(
+        database,
+        application_id,
+        attempt_number,
+        outcome="retryable_failure",
+        step="defer_queue",
+        error="The worker could not schedule a safe retry; manual retry is available.",
+    )
+    await _set_status(database, application_id, "failed")

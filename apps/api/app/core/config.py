@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -69,7 +71,6 @@ class Settings(BaseSettings):
 
     # --- LLM --------------------------------------------------------------
     anthropic_api_key: str | None = None
-    openai_api_key: str | None = None
     resume_agent_model: str = "claude-sonnet-4-5-20250929"
     resume_agent_temperature: float = Field(default=0.2, ge=0.0, le=1.0)
     xyz_max_repair_attempts: int = Field(
@@ -104,6 +105,9 @@ class Settings(BaseSettings):
     agent_rate_limit_per_hour: int = Field(
         default=60, ge=1, description="LLM turns per user per hour. Caps runaway spend."
     )
+    auth_rate_limit_per_minute: int = Field(
+        default=10, ge=1, description="Registration and login attempts per email per minute."
+    )
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -120,10 +124,23 @@ class Settings(BaseSettings):
         This check has saved more incidents than any amount of documentation.
         """
         if self.environment is Environment.PRODUCTION:
-            if self.jwt_secret_key == "change-me-openssl-rand-hex-32":
+            if self.jwt_secret_key == "change-me-openssl-rand-hex-32":  # noqa: S105
                 raise ValueError("JWT_SECRET_KEY must be set in production")
             if any("localhost" in o for o in self.cors_origins):
                 raise ValueError("CORS origins must not include localhost in production")
+            for label, uri in (
+                ("MONGODB_URI", self.mongodb_uri),
+                ("REDIS_URI", self.redis_uri),
+            ):
+                hostname = urlparse(uri).hostname
+                is_loopback = False
+                if hostname:
+                    try:
+                        is_loopback = ip_address(hostname).is_loopback
+                    except ValueError:
+                        is_loopback = hostname.casefold() == "localhost"
+                if not hostname or is_loopback:
+                    raise ValueError(f"{label} must point to a non-local service in production")
         return self
 
     @property

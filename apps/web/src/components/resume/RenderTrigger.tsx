@@ -9,6 +9,7 @@ import { duration } from "@/lib/format";
 import type { RenderJob, ResumeTemplate } from "@resunet/shared";
 
 const POLL_MS = 1_500;
+const MAX_RENDER_WAIT_MS = 180_000;
 
 export function RenderTrigger({
   resumeId,
@@ -24,7 +25,8 @@ export function RenderTrigger({
   const [message, setMessage] = useState<string | null>(null);
 
   async function poll(jobId: string): Promise<RenderJob> {
-    for (;;) {
+    const deadline = Date.now() + MAX_RENDER_WAIT_MS;
+    while (Date.now() < deadline) {
       const response = await fetch(`/api/resumes/render-jobs/${encodeURIComponent(jobId)}`);
       if (!response.ok) {
         throw new Error("poll failed");
@@ -34,6 +36,7 @@ export function RenderTrigger({
       if (current.status === "succeeded" || current.status === "failed") return current;
       await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     }
+    throw new Error("render timed out");
   }
 
   async function render() {
@@ -65,7 +68,7 @@ export function RenderTrigger({
         startTransition(() => router.refresh());
       }
     } catch {
-      setMessage("Could not reach the render worker.");
+      setMessage("Render status could not be confirmed. Refresh to check whether it finished.");
     } finally {
       setBusy(false);
     }

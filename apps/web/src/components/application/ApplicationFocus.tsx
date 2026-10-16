@@ -1,4 +1,5 @@
 import { StatusChip } from "@/components/application/StatusChip";
+import { ApplicationStatusForm } from "@/components/application/ApplicationStatusForm";
 import { Card, Chip } from "@/components/ui/primitives";
 import { Timestamp } from "@/components/ui/Timestamp";
 import { duration } from "@/lib/format";
@@ -27,6 +28,7 @@ export function ApplicationFocus({
       aside={<StatusChip status={application.status} />}
     >
       <div className="space-y-5 px-5 py-4">
+        <ApplicationStatusForm applicationId={application.id ?? ""} current={application.status} />
         <dl className="grid gap-3 text-sm sm:grid-cols-2">
           <div>
             <dt className="eyebrow">Company</dt>

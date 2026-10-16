@@ -45,6 +45,12 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   // for a user who does not exist.
   if (user === null) redirect("/login?reason=expired");
 
+  // openapi-typescript currently maps EmailStr's `format: email` to unknown.
+  // Validate the wire value here rather than passing an untrusted value to UI.
+  if (typeof user.email !== "string") {
+    throw new Error("The API returned an invalid current-user email.");
+  }
+
   return (
     <>
       <a

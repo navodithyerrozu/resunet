@@ -21,7 +21,7 @@ from pymongo import ReturnDocument
 from app.api.deps import CurrentUser
 from app.core.errors import NotFoundError
 from app.core.logging import get_logger
-from app.db.mongo import Collections, collection
+from app.db.mongo import Collections, collection, get_client
 from app.models.base import utcnow
 from app.models.bullet import BulletStatus
 from app.models.profile import CareerProfile, ExperienceEntry, SkillCount
@@ -68,23 +68,27 @@ def profile_to_mongo(profile: CareerProfile) -> dict[str, Any]:
         doc["_id"] = ObjectId(str(profile.id))
     else:
         doc.pop("_id", None)
-    return doc
+    return dict(doc)
 
 
-async def load_owned_profile(user: User) -> CareerProfile:
+async def load_owned_profile(user: User, *, session: Any | None = None) -> CareerProfile:
     """Load the caller's career profile, or 404.
 
     A missing document after registration is a data-integrity bug, not an
     empty state -- we log it and refuse to invent a blank profile.
     """
-    doc = await collection(Collections.CAREER_PROFILES).find_one(_owner_filter(user))
+    doc = await collection(Collections.CAREER_PROFILES).find_one(
+        _owner_filter(user), **({"session": session} if session is not None else {})
+    )
     if doc is None:
         logger.error("profile.missing", user_id=str(user.id))
         raise NotFoundError("Career profile not found.")
     return CareerProfile.model_validate(doc)
 
 
-async def archive_bullets_for_entry(user: User, entry_id: str) -> int:
+async def archive_bullets_for_entry(
+    user: User, entry_id: str, *, session: Any | None = None
+) -> int:
     """Mark bullets for a removed experience/project as archived.
 
     Never delete: a submitted resume version may still point at these rows.
@@ -101,6 +105,7 @@ async def archive_bullets_for_entry(user: User, entry_id: str) -> int:
             "profile_entry_id": {"$in": entry_values},
         },
         {"$set": {"status": BulletStatus.ARCHIVED.value, "updated_at": utcnow()}},
+        **({"session": session} if session is not None else {}),
     )
     return int(result.modified_count)
 
@@ -155,27 +160,30 @@ async def replace_profile(payload: CareerProfile, user: CurrentUser) -> CareerPr
     are ignored. Completeness is recomputed here. Entry ids the client sends
     back are kept so bullets stay attached.
     """
-    existing = await load_owned_profile(user)
+    client = get_client()
+    async with await client.start_session() as session, session.start_transaction():
+        existing = await load_owned_profile(user, session=session)
 
-    incoming = payload.model_copy(
-        update={
-            "id": existing.id,
-            "user_id": str(user.id),
-            "created_at": existing.created_at,
-            "updated_at": utcnow(),
-        }
-    ).with_preserved_entry_ids()
-    incoming.completeness = incoming.compute_completeness()
+        incoming = payload.model_copy(
+            update={
+                "id": existing.id,
+                "user_id": str(user.id),
+                "created_at": existing.created_at,
+                "updated_at": utcnow(),
+            }
+        ).with_preserved_entry_ids()
+        incoming.completeness = incoming.compute_completeness()
 
-    removed_ids = existing.bullet_parent_ids() - incoming.bullet_parent_ids()
-    for entry_id in removed_ids:
-        await archive_bullets_for_entry(user, entry_id)
+        removed_ids = existing.bullet_parent_ids() - incoming.bullet_parent_ids()
+        for entry_id in removed_ids:
+            await archive_bullets_for_entry(user, entry_id, session=session)
 
-    replaced = await collection(Collections.CAREER_PROFILES).find_one_and_replace(
-        _owner_filter(user),
-        profile_to_mongo(incoming),
-        return_document=ReturnDocument.AFTER,
-    )
+        replaced = await collection(Collections.CAREER_PROFILES).find_one_and_replace(
+            _owner_filter(user),
+            profile_to_mongo(incoming),
+            return_document=ReturnDocument.AFTER,
+            session=session,
+        )
     if replaced is None:
         logger.error("profile.missing_on_replace", user_id=str(user.id))
         raise NotFoundError("Career profile not found.")
@@ -221,22 +229,25 @@ async def add_experience(payload: ExperienceEntry, user: CurrentUser) -> Experie
 )
 async def delete_experience(entry_id: str, user: CurrentUser) -> None:
     """Pull one experience and archive (do not delete) its bullets."""
-    existing = await load_owned_profile(user)
-    if not any(item.entry_id == entry_id for item in existing.experiences):
-        raise NotFoundError()
+    client = get_client()
+    async with await client.start_session() as session, session.start_transaction():
+        existing = await load_owned_profile(user, session=session)
+        if not any(item.entry_id == entry_id for item in existing.experiences):
+            raise NotFoundError()
 
-    remaining = [item for item in existing.experiences if item.entry_id != entry_id]
-    completeness = existing.model_copy(update={"experiences": remaining}).compute_completeness()
+        remaining = [item for item in existing.experiences if item.entry_id != entry_id]
+        completeness = existing.model_copy(update={"experiences": remaining}).compute_completeness()
 
-    result = await collection(Collections.CAREER_PROFILES).update_one(
-        _owner_filter(user),
-        {
-            "$pull": {"experiences": {"entry_id": entry_id}},
-            "$set": {"completeness": completeness, "updated_at": utcnow()},
-        },
-    )
-    if result.matched_count == 0:
-        raise NotFoundError()
+        result = await collection(Collections.CAREER_PROFILES).update_one(
+            _owner_filter(user),
+            {
+                "$pull": {"experiences": {"entry_id": entry_id}},
+                "$set": {"completeness": completeness, "updated_at": utcnow()},
+            },
+            session=session,
+        )
+        if result.matched_count == 0:
+            raise NotFoundError()
 
-    await archive_bullets_for_entry(user, entry_id)
-    return None
+        await archive_bullets_for_entry(user, entry_id, session=session)
+    return

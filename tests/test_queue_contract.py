@@ -80,13 +80,22 @@ def _registered_task_names() -> set[str]:
     for main in WORKER_MAINS:
         tree = ast.parse(main.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.List)):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+                value = node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+                value = node.value
+            else:
+                continue
+            if not isinstance(value, ast.List):
                 continue
             if not any(
-                isinstance(t, ast.Name) and t.id == "functions" for t in node.targets
+                isinstance(target, ast.Name) and target.id == "functions"
+                for target in targets
             ):
                 continue
-            for element in node.value.elts:
+            for element in value.elts:
                 if isinstance(element, ast.Name):
                     names.add(element.id)
     return names

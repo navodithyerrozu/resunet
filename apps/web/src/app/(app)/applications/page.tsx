@@ -3,23 +3,26 @@ import Link from "next/link";
 import { APPLICATION_STAGES, PIPELINE_RAIL } from "@resunet/shared";
 
 import { ApplicationAction } from "@/components/application/ApplicationAction";
+import { ApplicationCreateForm } from "@/components/application/ApplicationCreateForm";
 import { ApplicationFocus } from "@/components/application/ApplicationFocus";
 import { StatusChip } from "@/components/application/StatusChip";
 import { Card, Chip, EmptyState } from "@/components/ui/primitives";
 import { Timestamp } from "@/components/ui/Timestamp";
 import { withFreshSession } from "@/lib/api/client";
-import { funnelStats, getApplication, listApplications } from "@/lib/api/endpoints";
+import { funnelStats, getApplication, listApplications, listJobs, listResumes, listResumeVersions } from "@/lib/api/endpoints";
 import { ApiError } from "@/lib/api/errors";
 import { pluralize } from "@/lib/format";
 
 import type { Metadata } from "next";
-import type { Application, ApplicationStatus, ApplicationSummary } from "@resunet/shared";
+import type { ApplicationStatus } from "@resunet/shared";
 
 export const metadata: Metadata = { title: "Applications" };
 
 const OFF_PATH: readonly ApplicationStatus[] = [
   "awaiting_approval",
   "failed",
+  "blocked",
+  "needs_review",
   "rejected",
   "withdrawn",
 ];
@@ -56,7 +59,7 @@ export default async function ApplicationsPage({
   const listQuery: { limit: number; status?: ApplicationStatus } = { limit: 50 };
   if (status !== undefined) listQuery.status = status;
 
-  const [apps, funnel, focused] = await withFreshSession(() =>
+  const [apps, funnel, focused, jobs, resumes] = await withFreshSession(() =>
     Promise.all([
       listApplications(listQuery),
       funnelStats(),
@@ -66,8 +69,20 @@ export default async function ApplicationsPage({
             throw error;
           })
         : Promise.resolve(null),
+      listJobs({ limit: 50, status: "open" }),
+      listResumes({ limit: 50 }),
     ]),
   );
+
+  const versionPages = await withFreshSession(() => Promise.all(
+    resumes.items.map((resume) => listResumeVersions(resume.id, { limit: 50 })),
+  ));
+  const versions = versionPages.flatMap((page) => page.items)
+    .filter((version) => version.pdf_path !== null)
+    .map((version) => ({
+      id: version.id ?? "",
+      label: `${resumes.items.find((resume) => resume.id === version.resume_id)?.title ?? "Resume"} · v${version.version}`,
+    }));
 
   const focusedSummary =
     focused !== null ? (apps.items.find((item) => item.id === focused.id) ?? null) : null;
@@ -78,6 +93,13 @@ export default async function ApplicationsPage({
         <p className="eyebrow">Tracker</p>
         <h1 className="mt-1.5 text-title">Applications</h1>
       </header>
+
+      <Card title="Add an application draft" eyebrow="Manual tracking">
+        <ApplicationCreateForm
+          jobs={jobs.items.map((job) => ({ id: job.id, label: `${job.title} · ${job.companyName}` }))}
+          versions={versions}
+        />
+      </Card>
 
       <Card title="Stage rail" eyebrow="Filter" aside={`${apps.total} shown`}>
         <div className="flex flex-wrap gap-2 px-5 py-4">

@@ -14,7 +14,13 @@ export function apiErrorResponse(error: unknown): NextResponse {
     );
   }
   if (error instanceof ApiError) {
-    return NextResponse.json({ detail: error.detail }, { status: error.status });
+    return NextResponse.json(
+      {
+        detail: error.detail,
+        ...(error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+      },
+      { status: error.status },
+    );
   }
   throw error;
 }

@@ -175,7 +175,27 @@ export type paths = {
   "/api/v1/ats/score": {
     post: {
       requestBody: { content: { "application/json": components["schemas"]["ScoreRequest"] } };
-      responses: { 200: { content: { "application/json": components["schemas"]["ATSScore"] } } };
+      responses: {
+        202: { content: { "application/json": components["schemas"]["ScoreSubmission"] } };
+      };
+    };
+  };
+  "/api/v1/ats/scores/{version_id}": {
+    get: {
+      parameters: {
+        path: { version_id: string };
+        query?: {
+          jobId?: string | null;
+          includeExtractedText?: boolean;
+          limit?: number;
+          offset?: number;
+        };
+      };
+      responses: {
+        200: {
+          content: { "application/json": components["schemas"]["Page_ATSScore_"] };
+        };
+      };
     };
   };
   "/api/v1/applications": {
@@ -294,6 +314,12 @@ export type components = {
       limit: number;
       offset: number;
     };
+    Page_ATSScore_: {
+      items: components["schemas"]["ATSScore"][];
+      total: number;
+      limit: number;
+      offset: number;
+    };
 
     /* BEGIN GENERATED SCHEMAS */
 
@@ -388,6 +414,8 @@ export type components = {
       | "awaiting_approval"
       | "submitted"
       | "failed"
+      | "blocked"
+      | "needs_review"
       | "acknowledged"
       | "screening"
       | "interviewing"
@@ -458,6 +486,8 @@ export type components = {
       source: components["schemas"]["BulletSource"];
       violations: components["schemas"]["XYZViolation"][];
       thread_id: string | null;
+      generation_achievement_id: string | null;
+      review_decision: components["schemas"]["ProposalReviewDecision"] | null;
       repair_attempts: number;
       embedding: number[] | null;
       times_used: number;
@@ -478,6 +508,8 @@ export type components = {
       violations: components["schemas"]["XYZViolation"][];
       repairAttempts: number;
       accepted: boolean;
+      bulletId: string | null;
+      decision: "accepted" | "revised" | "rejected" | null;
     };
 
     BulletSource: "user_authored" | "agent_generated" | "agent_rewritten" | "imported";
@@ -641,6 +673,7 @@ export type components = {
       descriptionRaw?: string | null;
       companyName?: string | null;
       title?: string | null;
+      status?: components["schemas"]["JobStatus"];
     };
 
     JobMatch: {
@@ -649,7 +682,7 @@ export type components = {
       updated_at: string;
       user_id: string;
       job_id: string;
-      score: number;
+      score: number | null;
       components: components["schemas"]["MatchComponents"];
       matched_keywords: string[];
       missing_keywords: string[];
@@ -660,7 +693,7 @@ export type components = {
 
     JobSource: {
       board: components["schemas"]["JobBoard"];
-      url: unknown;
+      url: unknown | null;
       external_id: string | null;
       scraped_at: string | null;
     };
@@ -696,11 +729,11 @@ export type components = {
     };
 
     MatchComponents: {
-      skill_overlap: number;
-      keyword_coverage: number;
-      seniority_fit: number;
-      semantic_similarity: number;
-      location_fit: number;
+      skill_overlap: number | null;
+      keyword_coverage: number | null;
+      seniority_fit: number | null;
+      semantic_similarity: number | null;
+      location_fit: number | null;
     };
 
     MessageRole: "user" | "assistant" | "system";
@@ -725,6 +758,13 @@ export type components = {
       tech_stack: string[];
       raw_notes: string;
     };
+
+    ProposalDecision: {
+      action: string;
+      draft: components["schemas"]["BulletDraft"] | null;
+    };
+
+    ProposalReviewDecision: "accepted" | "revised" | "rejected";
 
     RemoteType: "onsite" | "hybrid" | "remote" | "unknown";
 
@@ -878,6 +918,12 @@ export type components = {
       includeExtractedText?: boolean;
     };
 
+    ScoreSubmission: {
+      status: "queued";
+      resumeVersionId: string;
+      arqJobId: string | null;
+    };
+
     SectionKind:
       | "summary"
       | "experience"
@@ -958,7 +1004,7 @@ export type components = {
       id: string | null;
       created_at: string;
       updated_at: string;
-      email: unknown;
+      email: string;
       password_hash: string;
       full_name: string;
       status: components["schemas"]["UserStatus"];
@@ -969,19 +1015,19 @@ export type components = {
     };
 
     UserCreate: {
-      email: unknown;
+      email: string;
       password?: string;
       fullName?: string;
     };
 
     UserLogin: {
-      email: unknown;
+      email: string;
       password: string;
     };
 
     UserPublic: {
       id: string;
-      email: unknown;
+      email: string;
       fullName: string;
       status: components["schemas"]["UserStatus"];
       roles: components["schemas"]["UserRole"][];

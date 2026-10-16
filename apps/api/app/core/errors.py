@@ -69,7 +69,7 @@ class ConflictError(ResuNetError):
 
 
 class ValidationFailedError(ResuNetError):
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
     code = "validation_failed"
     message = "The submitted data is invalid."
 
@@ -114,3 +114,9 @@ class ExternalServiceError(ResuNetError):
     status_code = status.HTTP_502_BAD_GATEWAY
     code = "external_service_error"
     message = "An upstream service failed."
+
+
+class QueueUnavailableError(ResuNetError):
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "queue_unavailable"
+    message = "The background job queue is temporarily unavailable."

@@ -58,6 +58,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await disconnect_queues()
+        from app.agents.checkpointer import reset_checkpointer
+
+        reset_checkpointer()
         await disconnect()
         logger.info("app.stopped")
 
@@ -169,7 +172,13 @@ def create_app() -> FastAPI:
         response exposing stack frames or connection strings.
         """
         request_id = getattr(request.state, "request_id", None)
-        logger.exception("request.unhandled_exception", request_id=request_id)
+        # Do not put raw exception strings or tracebacks in shared logs: they
+        # can include request-derived resume content or provider payloads.
+        logger.error(
+            "request.unhandled_exception",
+            request_id=request_id,
+            error_type=type(exc).__name__,
+        )
         return JSONResponse(
             status_code=500,
             content={
