@@ -49,6 +49,9 @@ services:
     environment:
       MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
       REDIS_URI: redis://redis:6379/0
+      # Must match the render worker exactly, and point at the shared volume
+      # below -- otherwise the API cannot preview a PDF the worker wrote.
+      RENDER_STORAGE_DIR: /srv/storage/renders
       # The API is deliberately NOT given the credential decryption key.
       CREDENTIAL_ENCRYPTION_KEY: ""
     ports:
@@ -72,6 +75,7 @@ services:
     environment:
       MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
       REDIS_URI: redis://redis:6379/0
+      RENDER_STORAGE_DIR: /srv/storage/renders
     volumes:
       - ./apps/render-worker:/srv/render-worker
       - render_storage:/srv/storage/renders
