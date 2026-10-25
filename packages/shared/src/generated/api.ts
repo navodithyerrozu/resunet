@@ -958,7 +958,7 @@ export type components = {
       id: string | null;
       created_at: string;
       updated_at: string;
-      email: unknown;
+      email: string;
       password_hash: string;
       full_name: string;
       status: components["schemas"]["UserStatus"];
@@ -969,19 +969,19 @@ export type components = {
     };
 
     UserCreate: {
-      email: unknown;
+      email: string;
       password?: string;
       fullName?: string;
     };
 
     UserLogin: {
-      email: unknown;
+      email: string;
       password: string;
     };
 
     UserPublic: {
       id: string;
-      email: unknown;
+      email: string;
       fullName: string;
       status: components["schemas"]["UserStatus"];
       roles: components["schemas"]["UserRole"][];
