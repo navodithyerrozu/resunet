@@ -146,6 +146,15 @@ class TestWeakVerbs:
         codes = {v.code for v in draft(action=action).validate_xyz()}
         assert XYZViolationCode.WEAK_VERB not in codes
 
+    def test_rejects_duty_language_after_pronoun(self) -> None:
+        """Regression: "I was responsible for ..." was missed because the
+        validator only inspected the first token, which was "I"."""
+        codes = {v.code for v in draft(action="I was responsible for the pipeline").validate_xyz()}
+        assert XYZViolationCode.WEAK_VERB in codes
+        # And a strong verb after a pronoun must still not be flagged.
+        codes = {v.code for v in draft(action="I rebuilt the pipeline").validate_xyz()}
+        assert XYZViolationCode.WEAK_VERB not in codes
+
 
 class TestFirstPerson:
     @pytest.mark.parametrize(
@@ -172,7 +181,27 @@ class TestMethodAndLength:
         assert XYZViolationCode.MISSING_METHOD in codes
 
     def test_rejects_overlong_bullet(self) -> None:
-        codes = {v.code for v in draft(method="using " + "a very long toolchain " * 15).validate_xyz()}
+        """An overlong bullet is rejected at two layers, and both are pinned.
+
+        The field itself is capped at 200 characters, so ordinary construction
+        raises a Pydantic ValidationError before validate_xyz() ever runs --
+        that is the API's 422 path, and the test used to (incorrectly) expect
+        validate_xyz() to see the value. The TOO_LONG violation still has a
+        job: components that are each within their field caps can still
+        assemble past the 240-character ceiling, so it is exercised here via
+        model_construct(), which bypasses field validation exactly as a
+        draft assembled from stored components would.
+        """
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            draft(method="using " + "a very long toolchain " * 15)
+        overlong = BulletDraft.model_construct(
+            action=GOOD["action"],
+            metric=GOOD["metric"],
+            method="using " + "a very long toolchain " * 15,
+        )
+        codes = {v.code for v in overlong.validate_xyz()}
         assert XYZViolationCode.TOO_LONG in codes
 
     def test_length_limit_is_configurable(self) -> None:
@@ -194,10 +223,19 @@ class TestTextAssembly:
         assert d.text.endswith(".")
 
     def test_component_punctuation_is_normalised(self) -> None:
-        """Trailing punctuation on components must not produce '..' when assembled."""
+        """Trailing punctuation on components must not produce '..' when assembled.
+
+        The old assertion counted exactly one "." in the whole bullet, which
+        was never true for this fixture: the baseline metric itself contains
+        decimals ("4.2%", "0.8%", "1.2M"), so a correctly assembled bullet
+        has four periods. What the test actually means -- and what is pinned
+        here -- is that no *doubled* period is created at a component join
+        and the bullet ends with exactly one terminal period.
+        """
         d = draft(action="Built the pipeline;", method="using Redis and Celery.")
         assert ".." not in d.text
-        assert d.text.count(".") == 1
+        assert d.text.endswith(".")
+        assert not d.text.endswith("..")
 
     def test_multiple_violations_all_reported(self) -> None:
         """The repair prompt needs the full list, not just the first failure."""
