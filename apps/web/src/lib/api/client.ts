@@ -100,7 +100,9 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
     response = await fetch(buildUrl(path, query), {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // `exactOptionalPropertyTypes` rejects an explicit `body: undefined`,
+      // so the key is only present when there is a body to send.
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       // Default to no-store. Per-user data behind a bearer token must never
       // land in a shared cache -- a cached resume served to the wrong account
       // is the worst bug this app could have. Callers opt into caching
@@ -235,7 +237,8 @@ export async function apiFetchBinary(path: string, options: RequestOptions = {})
     response = await fetch(buildUrl(path, query), {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // See apiFetch: `exactOptionalPropertyTypes` rejects `body: undefined`.
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       cache: cache ?? "no-store",
       ...(tags && tags.length > 0 ? { next: { tags } } : {}),
       signal: AbortSignal.timeout(timeoutMs),
