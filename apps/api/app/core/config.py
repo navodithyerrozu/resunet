@@ -80,7 +80,16 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=60, ge=5, le=300)
 
     # --- Rendering --------------------------------------------------------
-    render_storage_dir: Path = Path("./storage/renders")
+    # Must be the SAME directory the render worker writes to, or the API
+    # will compile successfully, score successfully, and then fail to
+    # preview with "Rendered PDF is not available." -- exactly what happened
+    # live. The old relative default resolved differently in each container
+    # (API: /srv/api/storage/renders, worker: /srv/render-worker/storage/
+    # renders), while Compose mounts the shared volume at /srv/storage/
+    # renders. In Docker, keep this absolute shared path; for a local
+    # non-Docker run, override it in .env to a directory both processes
+    # actually share.
+    render_storage_dir: Path = Path("/srv/storage/renders")
     latex_compile_timeout_seconds: int = Field(default=45, ge=5, le=300)
 
     # --- Automation -------------------------------------------------------
