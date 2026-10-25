@@ -64,6 +64,9 @@ def profile_to_mongo(profile: CareerProfile) -> dict[str, Any]:
     """Persist a profile with BSON ObjectIds on `_id` and `user_id`."""
     doc = _bson_safe(profile.model_dump(by_alias=True, exclude_none=True))
     doc["user_id"] = ObjectId(str(profile.user_id))
+    # `by_alias` now yields `id` (serialization alias); storage needs `_id`
+    # only, and leaving both keys makes re-validation reject `id` as extra.
+    doc.pop("id", None)
     if profile.id:
         doc["_id"] = ObjectId(str(profile.id))
     else:
