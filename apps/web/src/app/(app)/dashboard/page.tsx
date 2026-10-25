@@ -10,8 +10,8 @@ import { Timestamp } from "@/components/ui/Timestamp";
 import { withFreshSession } from "@/lib/api/client";
 import {
   funnelStats,
+  listAllBullets,
   listApplications,
-  listBullets,
   listProfileSkills,
   listResumes,
   topRecommendations,
@@ -77,7 +77,7 @@ export default async function DashboardPage() {
   const primaryResume = resumes.items[0];
   const bullets =
     primaryResume !== undefined
-      ? await withFreshSession(() => listBullets(primaryResume.id, { limit: 200 }))
+      ? await withFreshSession(() => listAllBullets(primaryResume.id))
       : null;
   const compliantBullets = bullets?.items.filter((b) => b.violations.length === 0).length ?? 0;
   const totalBullets = bullets?.items.length ?? 0;
