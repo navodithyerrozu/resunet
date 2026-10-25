@@ -31,8 +31,13 @@
    * \pagestyle{empty}. Content in headers and footers is frequently dropped
      entirely by extractors, so nothing important may live there.
 
-   Delimiters are non-standard because LaTeX owns { and %:
-       << var >>   <% stmt %>   <# comment #>
+   Delimiters are non-standard because LaTeX owns braces and percent signs,
+   so variable, statement, and comment delimiters here are the double-angle
+   and angle-percent forms, not the usual Jinja ones. Do NOT write a literal
+   comment delimiter inside a comment: Jinja comments do not nest, so an
+   inner comment opener would end this comment early and leak the rest of
+   this line into the rendered document before documentclass, which makes
+   pdflatex fail with Missing begin document.
    =========================================================================== #>
 \documentclass[<% block fontsize %>11pt<% endblock %>,letterpaper]{article}
 
