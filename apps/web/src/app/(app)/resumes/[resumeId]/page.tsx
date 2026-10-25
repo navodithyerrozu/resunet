@@ -7,7 +7,7 @@ import { ResumeTemplateSelect, ResumeWorkspaceEditor } from "@/components/resume
 import { XyzBullet } from "@/components/resume/XyzBullet";
 import { Card, Chip, EmptyState, Meter } from "@/components/ui/primitives";
 import { withFreshSession } from "@/lib/api/client";
-import { getResume, listBullets, listResumeVersions } from "@/lib/api/endpoints";
+import { getResume, listAllBullets, listResumeVersions } from "@/lib/api/endpoints";
 import { ApiError } from "@/lib/api/errors";
 
 import type { Metadata } from "next";
@@ -49,7 +49,7 @@ export default async function ResumeWorkspacePage({ params }: { params: Params }
     const loaded = await withFreshSession(() =>
       Promise.all([
         getResume(resumeId),
-        listBullets(resumeId, { limit: 200 }),
+        listAllBullets(resumeId),
         listResumeVersions(resumeId, { limit: 50 }),
       ]),
     );
