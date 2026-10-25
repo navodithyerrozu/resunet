@@ -91,11 +91,16 @@ def _extract_log_tail(log: str, *, limit: int = 2048) -> str:
     Prefers actual error lines; falls back to the tail. pdflatex's own summary
     is at the end, but the *cause* is usually a few hundred lines earlier, so
     grepping for error markers beats blindly truncating.
+
+    Returns whole lines, not just the regex match: the old code returned
+    `match.group(0)`, and for a `file:line:` marker that is only the prefix
+    up to the colon, discarding the actual error message after it. That is
+    why live failures surfaced as a useless `resume-1.tex:1:` with nothing
+    after the colon.
     """
-    errors = _ERROR_LINE.findall(log)
-    if errors:
-        matches = [m.group(0) for m in _ERROR_LINE.finditer(log)]
-        joined = "\n".join(matches)
+    error_lines = [line for line in log.splitlines() if _ERROR_LINE.search(line)]
+    if error_lines:
+        joined = "\n".join(error_lines)
         if joined:
             return joined[-limit:]
     return log[-limit:]
