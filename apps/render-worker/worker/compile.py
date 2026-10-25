@@ -33,8 +33,11 @@ logger = structlog.get_logger(__name__)
 _SOURCE_DATE_EPOCH = "1577836800"
 
 # Lines worth surfacing from a 3000-line pdflatex log. Everything else is noise
-# about font maps.
-_ERROR_LINE = re.compile(r"^(?:!|.*?:\d+:|LaTeX Error:|Runaway argument)", re.MULTILINE)
+# about font maps. The `l.<number>` lines matter too: with -file-line-error,
+# pdflatex reports "Undefined control sequence" on one line and the actual
+# offending command (e.g. `l.69 \section{Summary}`) on the next, so dropping
+# those lines hides which command failed.
+_ERROR_LINE = re.compile(r"^(?:!|.*?:\d+:|LaTeX Error:|Runaway argument|l\.\d+)", re.MULTILINE)
 _PAGE_COUNT = re.compile(r"Output written on .*?\((\d+) pages?", re.DOTALL)
 
 
