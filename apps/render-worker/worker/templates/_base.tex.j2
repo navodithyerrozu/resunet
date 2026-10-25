@@ -60,6 +60,14 @@
   right=<% block marginright %>0.65in<% endblock %>
 ]{geometry}
 
+<# xcolor is load-bearing, not cosmetic: the section rule below uses
+   \color{black}. No other package in this preamble loads color by itself
+   (hyperref with hidelinks does not), so without this line the first
+   \section in the body fails with "Undefined control sequence" at that
+   section line -- which is exactly what a seeded resume hits, since its
+   first section is Summary. #>
+\usepackage{xcolor}
+
 \usepackage{enumitem}
 \usepackage{titlesec}
 \usepackage[hidelinks]{hyperref}
