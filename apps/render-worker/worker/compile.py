@@ -33,8 +33,11 @@ logger = structlog.get_logger(__name__)
 _SOURCE_DATE_EPOCH = "1577836800"
 
 # Lines worth surfacing from a 3000-line pdflatex log. Everything else is noise
-# about font maps.
-_ERROR_LINE = re.compile(r"^(?:!|.*?:\d+:|LaTeX Error:|Runaway argument)", re.MULTILINE)
+# about font maps. The `l.<number>` lines matter too: with -file-line-error,
+# pdflatex reports "Undefined control sequence" on one line and the actual
+# offending command (e.g. `l.69 \section{Summary}`) on the next, so dropping
+# those lines hides which command failed.
+_ERROR_LINE = re.compile(r"^(?:!|.*?:\d+:|LaTeX Error:|Runaway argument|l\.\d+)", re.MULTILINE)
 _PAGE_COUNT = re.compile(r"Output written on .*?\((\d+) pages?", re.DOTALL)
 
 
@@ -91,11 +94,16 @@ def _extract_log_tail(log: str, *, limit: int = 2048) -> str:
     Prefers actual error lines; falls back to the tail. pdflatex's own summary
     is at the end, but the *cause* is usually a few hundred lines earlier, so
     grepping for error markers beats blindly truncating.
+
+    Returns whole lines, not just the regex match: the old code returned
+    `match.group(0)`, and for a `file:line:` marker that is only the prefix
+    up to the colon, discarding the actual error message after it. That is
+    why live failures surfaced as a useless `resume-1.tex:1:` with nothing
+    after the colon.
     """
-    errors = _ERROR_LINE.findall(log)
-    if errors:
-        matches = [m.group(0) for m in _ERROR_LINE.finditer(log)]
-        joined = "\n".join(matches)
+    error_lines = [line for line in log.splitlines() if _ERROR_LINE.search(line)]
+    if error_lines:
+        joined = "\n".join(error_lines)
         if joined:
             return joined[-limit:]
     return log[-limit:]

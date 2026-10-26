@@ -117,6 +117,26 @@ export function listBullets(
 }
 
 /**
+ * All bullets for a resume, across pages.
+ *
+ * The backend caps a single page at 100 items, so asking for 200 in one
+ * request is rejected with a 422. Callers that need the full set (the
+ * dashboard bullet counts, the workspace editor) page through with the
+ * maximum allowed page size instead of assuming one page holds everything.
+ */
+export async function listAllBullets(resumeId: string): Promise<Page<Bullet>> {
+  const PAGE_SIZE = 100;
+  const first = await listBullets(resumeId, { limit: PAGE_SIZE, offset: 0 });
+  const items = [...first.items];
+  while (items.length < first.total) {
+    const page = await listBullets(resumeId, { limit: PAGE_SIZE, offset: items.length });
+    if (page.items.length === 0) break;
+    items.push(...page.items);
+  }
+  return { items, total: first.total, limit: items.length, offset: 0 };
+}
+
+/**
  * Queue a LaTeX compile. Returns immediately with a job to poll.
  *
  * The API enqueues onto the render worker rather than compiling inline, so a

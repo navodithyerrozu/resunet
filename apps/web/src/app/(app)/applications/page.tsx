@@ -13,7 +13,7 @@ import { ApiError } from "@/lib/api/errors";
 import { pluralize } from "@/lib/format";
 
 import type { Metadata } from "next";
-import type { Application, ApplicationStatus, ApplicationSummary } from "@resunet/shared";
+import type { ApplicationStatus } from "@resunet/shared";
 
 export const metadata: Metadata = { title: "Applications" };
 

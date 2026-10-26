@@ -80,13 +80,23 @@ class MongoModel(AppModel):
     trade.
     """
 
-    id: PyObjectId | None = Field(default=None, alias="_id")
+    # Input accepts Mongo's `_id` (alias); output must use `id`, which is
+    # what the frontend types and the OpenAPI schema expect. Without
+    # `serialization_alias`, FastAPI serializes this field as `_id`, so the
+    # frontend reads `resume.id` as `undefined` and calls
+    # `/resumes/undefined/render` (and `/resumes/undefined` for PATCH) — a
+    # 404 that looks like rendering is broken, when no render was ever queued.
+    id: PyObjectId | None = Field(default=None, alias="_id", serialization_alias="id")
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
     def to_mongo(self, *, exclude_none: bool = True) -> dict[str, Any]:
         """Serialize for insertion, dropping `_id` when unset so Mongo assigns one."""
         doc = self.model_dump(by_alias=True, exclude_none=exclude_none)
+        # `by_alias` now follows `serialization_alias` and yields `id`;
+        # Mongo storage still needs `_id`, so rename it back here only.
+        if "id" in doc:
+            doc["_id"] = doc.pop("id")
         if doc.get("_id") is None:
             doc.pop("_id", None)
         return doc

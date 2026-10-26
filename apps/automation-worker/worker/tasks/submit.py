@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from bson import ObjectId
 from playwright.async_api import Browser
 
 from worker import browser as browser_mod
@@ -42,6 +43,57 @@ from worker.settings import get_settings
 logger = structlog.get_logger(__name__)
 
 _TERMINAL_STATUSES = frozenset({"submitted", "rejected", "withdrawn", "offer", "hired"})
+
+
+def _id_candidates(value: Any) -> list[Any]:
+    """Every stored form of one id: the value itself plus its ObjectId/string twin.
+
+    The API stores `_id`, `user_id`, `job_id` and `resume_version_id` as BSON
+    ObjectIds (see apps/api routes), while the queue hands the worker hex
+    strings. A Motor query for `{"_id": "<hex>"}` never matches an ObjectId
+    document, so the unconverted worker reported "application not found" for
+    applications that exist. Querying `$in` with both forms matches documents
+    stored either way, including legacy string-id documents, without ever
+    calling `ObjectId()` on an unvalidated string (which would raise
+    InvalidId on a non-hex id and lose the job to an exception instead of a
+    recorded failure).
+    """
+    if value is None:
+        return []
+    candidates: list[Any] = [value]
+    if isinstance(value, ObjectId):
+        candidates.append(str(value))
+    elif isinstance(value, str) and ObjectId.is_valid(value):
+        candidates.append(ObjectId(value))
+    seen: set[str] = set()
+    unique: list[Any] = []
+    for candidate in candidates:
+        key = repr(candidate)
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
+def _id_filter(value: Any) -> dict[str, Any]:
+    """A `_id` filter that matches the id in either stored form."""
+    return {"_id": {"$in": _id_candidates(value)}}
+
+
+def _user_filter(value: Any) -> dict[str, Any]:
+    """A `user_id` filter that matches the id in either stored form."""
+    return {"user_id": {"$in": _id_candidates(value)}}
+
+
+def _same_owner(stored: Any, claimed: str | None) -> bool:
+    """Ownership comparison across the ObjectId/string boundary.
+
+    Comparing the stored ObjectId directly to the enqueued hex string always
+    failed, so a legitimate owner was refused as a mismatch. Stringifying
+    both sides is the correct comparison: ObjectId hex and its string form
+    are the same identity.
+    """
+    return stored is not None and claimed is not None and str(stored) == str(claimed)
 
 
 async def submit_application(
@@ -81,7 +133,16 @@ async def submit_application(
         application_id=application_id, attempt=attempt_number, approved=approved
     )
 
-    application = await database.applications.find_one({"_id": application_id})
+    if not application_id or not isinstance(application_id, str):
+        # An empty/missing id is a malformed queue payload, not a missing
+        # document: report it as a permanent failure so the job is recorded
+        # and dropped, rather than crashing or retrying forever. A non-hex
+        # string is NOT rejected here -- legacy documents may carry string
+        # ids, and a miss below reports "application not found" cleanly.
+        log.error("submit.application_id_invalid")
+        return _result("permanent_failure", "application id is missing or invalid")
+
+    application = await database.applications.find_one(_id_filter(application_id))
     if application is None:
         log.error("submit.application_not_found")
         return _result("permanent_failure", "application not found")
@@ -91,7 +152,7 @@ async def submit_application(
         log.info("submit.already_terminal", status=application.get("status"))
         return _result("success", "already in a terminal state; nothing to do")
 
-    if user_id is not None and application.get("user_id") != user_id:
+    if user_id is not None and not _same_owner(application.get("user_id"), user_id):
         # Refuse rather than proceed on the stored owner. If these disagree, the
         # queue payload does not describe reality, and the next irreversible
         # action would be taken on behalf of the wrong person.
@@ -102,7 +163,7 @@ async def submit_application(
         )
         return _result("permanent_failure", "application does not belong to the requesting user")
 
-    job = await database.jobs.find_one({"_id": application["job_id"]})
+    job = await database.jobs.find_one(_id_filter(application.get("job_id")))
     if job is None:
         return _result("permanent_failure", "job posting record missing")
 
@@ -129,7 +190,9 @@ async def submit_application(
         log.info("submit.paced", board=board, defer_seconds=wait)
         return _result("deferred", f"board pacing: {wait:.0f}s", defer_seconds=wait)
 
-    version = await database.resume_versions.find_one({"_id": application["resume_version_id"]})
+    version = await database.resume_versions.find_one(
+        _id_filter(application.get("resume_version_id"))
+    )
     if version is None or not version.get("pdf_path"):
         return _result("permanent_failure", "no rendered PDF for this resume version")
 
@@ -140,8 +203,8 @@ async def submit_application(
         # this is retryable at a higher level, not here.
         return _result("permanent_failure", "rendered PDF is missing from storage")
 
-    profile = await database.career_profiles.find_one({"user_id": application["user_id"]})
-    user = await database.users.find_one({"_id": application["user_id"]})
+    profile = await database.career_profiles.find_one(_user_filter(application["user_id"]))
+    user = await database.users.find_one(_id_filter(application["user_id"]))
     if profile is None or user is None:
         return _result("permanent_failure", "user profile is incomplete")
 
@@ -165,7 +228,7 @@ async def submit_application(
     login = None
     if adapter.requires_login:
         credential = await database.board_credentials.find_one(
-            {"user_id": application["user_id"], "board": board, "status": "active"}
+            {**_user_filter(application["user_id"]), "board": board, "status": "active"}
         )
         if credential is None:
             return _result("needs_human", f"no stored credentials for board {board!r}")
@@ -495,7 +558,7 @@ async def _record_attempt(
         "started_at": datetime.now(UTC).isoformat(),
     }
     await database.applications.update_one(
-        {"_id": application_id},
+        _id_filter(application_id),
         {"$push": {"attempts": attempt}, "$set": {"updated_at": datetime.now(UTC)}},
     )
 
@@ -506,7 +569,7 @@ async def _set_status(
     update: dict[str, Any] = {"status": status, "updated_at": datetime.now(UTC)}
     if submitted:
         update["submitted_at"] = datetime.now(UTC)
-    await database.applications.update_one({"_id": application_id}, {"$set": update})
+    await database.applications.update_one(_id_filter(application_id), {"$set": update})
 
 
 def _result(

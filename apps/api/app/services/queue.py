@@ -136,18 +136,24 @@ async def enqueue_render(
 
 
 async def enqueue_submission(
-    *, application_id: str, user_id: str, defer_seconds: int = 0
+    *, application_id: str, user_id: str, defer_seconds: int = 0, approved: bool = False
 ) -> str | None:
     """Queue an application submission.
 
     `defer_seconds` supports deliberate jitter between submissions to the same
     board. Firing twenty applications at one ATS in ten seconds is the
     clearest possible bot signal.
+
+    `approved` is set only by the API's explicit approval endpoint: it is the
+    one thing that bypasses the worker's human-in-the-loop gate, and the
+    worker replays the whole pipeline from navigation rather than resuming a
+    held browser.
     """
     job = await automation_queue().enqueue_job(
         TaskName.SUBMIT_APPLICATION.value,
         application_id=application_id,
         user_id=user_id,
+        approved=approved,
         _job_id=f"submit:{application_id}",
         _defer_by=defer_seconds or None,
         _queue_name=get_settings().automation_queue_name,

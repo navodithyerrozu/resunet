@@ -109,6 +109,19 @@ class ResumeVersionRead(ReadModel):
 
         A heading with nothing under it is a visible defect in a PDF and, for
         an ATS, a section keyword with no supporting content.
+
+        Only experience/projects (and any future kind the template does not
+        render separately) come back here. Summary, skills, education, and
+        certifications are rendered by dedicated blocks in `_base.tex.j2`
+        from `summary`, `skill_groups`, `education`, and `certifications`
+        -- including them in this loop as well used to print each of those
+        headings twice, and printed empty Summary/Skills headings even on
+        a resume with no summary or skills at all.
         """
-        populated = [s for s in self.sections if s.entries or s.kind in {"summary", "skills"}]
+        _SEPARATELY_RENDERED = {"summary", "skills", "education", "certifications"}
+        populated = [
+            s
+            for s in self.sections
+            if s.kind not in _SEPARATELY_RENDERED and s.entries
+        ]
         return sorted(populated, key=lambda s: s.order)

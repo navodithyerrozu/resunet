@@ -32,7 +32,11 @@ class RenderSettings(BaseSettings):
     redis_uri: str = "redis://localhost:6379/0"
     render_queue_name: str = "resunet:render"
 
-    render_storage_dir: Path = Path("./storage/renders")
+    # Must match the API's render_storage_dir exactly: the shared Compose
+    # volume at /srv/storage/renders. A relative path resolved to a different
+    # directory in each container, so the worker's PDF was invisible to the
+    # API preview even though compiling and ATS scoring both succeeded.
+    render_storage_dir: Path = Path("/srv/storage/renders")
 
     latex_compile_timeout_seconds: int = Field(
         default=45,

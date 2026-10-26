@@ -37,9 +37,19 @@ class TestInjectionNeutralisation:
         assert r"\textbackslash{}" in escaped
 
     def test_brace_groups_cannot_be_opened(self) -> None:
+        """Every brace in the input must come out escaped, none dropped.
+
+        The old expectation (one "\\{" and one "\\}") was simply miscounted:
+        the input "}{\\evil{" contains TWO opening braces and ONE closing
+        brace, so correct escaping yields two "\\{" and one "\\}". Expecting
+        one would require dropping a brace -- i.e. weakening the escaper.
+        The code was right; the test was wrong. The command itself must also
+        be defanged: no raw "\\evil" may survive.
+        """
         escaped = escape_latex("}{\\evil{")
-        assert escaped.count(r"\{") == 1
+        assert escaped.count(r"\{") == 2
         assert escaped.count(r"\}") == 1
+        assert r"\evil" not in escaped
 
     @pytest.mark.parametrize("char", ["$", "&", "#", "_", "%", "~", "^"])
     def test_every_special_char_is_escaped(self, char: str) -> None:

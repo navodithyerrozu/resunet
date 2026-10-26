@@ -69,6 +69,32 @@ _WEAK_OPENERS = frozenset({
     "involved", "tasked", "duties", "handled", "supported", "contributed",
 })
 
+# Words that may precede the real verb without changing its meaning:
+# a first-person pronoun ("I", "we") and the auxiliary it pairs with
+# ("was", "were"). Without skipping them, "I was responsible for ..." was
+# missed entirely, because the first token checked was "I" rather than
+# "responsible". Only leading tokens are skipped -- a weak word buried
+# mid-sentence ("Built a team responsible for ...") is an adjective there,
+# not a duty-listing opener, and must not be flagged.
+_WEAK_OPENER_PREFIXES = frozenset({
+    "i", "we", "my", "our", "me", "us", "was", "were", "am", "is", "are",
+})
+
+
+def _has_weak_opener(action: str) -> str | None:
+    """Return the weak opener verb, or None.
+
+    The verb is the first token that is neither a leading pronoun nor its
+    auxiliary, so "Responsible for ..." and "I was responsible for ..."
+    are both caught, while "I rebuilt ..." (verb: "rebuilt") is not.
+    """
+    tokens = re.findall(r"[a-z]+", action.lower())
+    for token in tokens:
+        if token in _WEAK_OPENER_PREFIXES:
+            continue
+        return token if token in _WEAK_OPENERS else None
+    return None
+
 
 class BulletStatus(StrEnum):
     """Lifecycle of a bullet through the generate/validate/approve pipeline."""
@@ -192,12 +218,12 @@ class BulletDraft(ApiModel):
                 )
             )
 
-        first_word = self.action.split()[0].lower().rstrip(",")
-        if first_word in _WEAK_OPENERS:
+        weak_opener = _has_weak_opener(self.action)
+        if weak_opener is not None:
             violations.append(
                 XYZViolation(
                     code=XYZViolationCode.WEAK_VERB,
-                    message=f"'{first_word}' describes a duty, not an accomplishment.",
+                    message=f"'{weak_opener}' describes a duty, not an accomplishment.",
                     hint="Open with an outcome verb: Built, Shipped, Reduced, "
                     "Automated, Migrated, Designed.",
                 )
