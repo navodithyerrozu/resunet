@@ -3,14 +3,21 @@
 Topology
 --------
 
-    mine ──► draft ──► validate ──┬─(compliant)──────► accept ──┐
-                ▲                 ├─(no metric)──────► clarify ─┤
-                │                 ├─(fixable)───────► repair ───┘
+    mine ──┬─(has metric)──────► draft ──► validate ──┬─(compliant)──────► accept ──┐
+           │                      ▲                 ├─(no metric)──────► clarify ─┤
+           └─(needs metric)──► clarify ─┘                 ├─(fixable)───────► repair ───┘
                 │                 └─(budget spent)──► flag ─────┐
                 │                                               │
                 └───────────────────────────────────────────────┤
                                                                 │
                                           (queue empty) ──► finalize ──► END
+
+An achievement that mining tagged as needing clarification goes to clarify
+*before* drafting, not after. Drafting first lets a model invent a metric to
+satisfy the XYZ prompt, and the validator can only check that a number
+exists, not that it came from the notes -- so an invented metric would pass
+and be accepted. The same gate applies when advancing to the next
+achievement after accept/flag (see route_next_achievement).
 
 The loop is the design. A bullet cannot leave `validate` in a non-compliant
 state: it either passes, gets repaired, prompts a question to the user, or is
@@ -24,6 +31,8 @@ caught rather than trusted.
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -40,10 +49,32 @@ from app.agents.resume.nodes import (
     route_next_achievement,
     validate_bullet,
 )
+from app.agents.resume.nodes.draft import current_achievement
 from app.agents.resume.state import ResumeAgentState
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def route_after_mining(
+    state: ResumeAgentState,
+) -> Literal["draft", "clarify"]:
+    """Conditional edge after mining: ask before drafting, never after.
+
+    An achievement flagged as needing clarification must not reach the draft
+    node, because drafting requires a metric and a model with no number to
+    draw on will invent one rather than refuse. The clarify node interrupts
+    and asks the user; its edge back to draft runs only once an answer exists
+    (draft consumes ``user_response``), so this gate cannot loop.
+    """
+    achievement = current_achievement(state)
+    if (
+        achievement is not None
+        and achievement.get("needs_clarification")
+        and not state.get("user_response")
+    ):
+        return "clarify"
+    return "draft"
 
 
 def build_graph() -> StateGraph[ResumeAgentState, None, ResumeAgentState, ResumeAgentState]:
@@ -66,7 +97,11 @@ def build_graph() -> StateGraph[ResumeAgentState, None, ResumeAgentState, Resume
     graph.add_node("finalize", finalize)
 
     graph.add_edge(START, "mine")
-    graph.add_edge("mine", "draft")
+    graph.add_conditional_edges(
+        "mine",
+        route_after_mining,
+        {"draft": "draft", "clarify": "clarify"},
+    )
     graph.add_edge("draft", "validate")
 
     # The enforcement gate.
@@ -87,11 +122,13 @@ def build_graph() -> StateGraph[ResumeAgentState, None, ResumeAgentState, Resume
     graph.add_edge("clarify", "draft")
 
     # After each bullet resolves, either take the next achievement or finish.
+    # The next achievement goes through the same pre-draft clarification gate
+    # as the first one, or it could be drafted with an invented metric.
     for node in ("accept", "flag"):
         graph.add_conditional_edges(
             node,
             route_next_achievement,
-            {"draft": "draft", "finalize": "finalize"},
+            {"draft": "draft", "clarify": "clarify", "finalize": "finalize"},
         )
 
     graph.add_edge("finalize", END)

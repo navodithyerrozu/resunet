@@ -9,8 +9,11 @@ guarantee while every behavioural test still passed.
 
 from __future__ import annotations
 
-from app.agents.resume.graph import build_graph
-from app.agents.resume.nodes.validate import route_after_validation
+from app.agents.resume.graph import build_graph, route_after_mining
+from app.agents.resume.nodes.validate import (
+    route_after_validation,
+    route_next_achievement,
+)
 from app.agents.resume.state import ResumeAgentState, initial_state
 from app.models.bullet import XYZViolation, XYZViolationCode
 
@@ -40,6 +43,94 @@ class TestTopology:
     def test_graph_compiles_without_checkpointer(self) -> None:
         """Compilation must not require Mongo -- keeps tests and codegen cheap."""
         assert build_graph().compile() is not None
+
+    def test_mine_can_route_to_clarify_before_drafting(self) -> None:
+        """No path from mine to draft may skip the clarification gate.
+
+        Regression test for the 2026-11-01 live failure: a metric-less note
+        was drafted with an invented 25% because mine went straight to draft
+        and the validator only checks that a number exists, not its source.
+        """
+        graph = build_graph().compile().get_graph()
+        targets = {e.target for e in graph.edges if e.source == "mine"}
+        assert targets == {"draft", "clarify"}
+
+    def test_accept_can_route_to_clarify_for_next_achievement(self) -> None:
+        graph = build_graph().compile().get_graph()
+        targets = {e.target for e in graph.edges if e.source == "accept"}
+        assert targets == {"draft", "clarify", "finalize"}
+
+
+class TestMiningRouting:
+    """route_after_mining is pure logic, tested without any LLM."""
+
+    def _state(self, **kwargs: object) -> ResumeAgentState:
+        state = initial_state(user_id="u1", thread_id="t1", raw_notes="notes")
+        state.update(kwargs)  # type: ignore[typeddict-item]
+        return state
+
+    def _achievement(self, needs: bool) -> dict[str, object]:
+        return {
+            "id": "ach_0",
+            "raw_text": "worked on the borrowing system",
+            "has_metric": not needs,
+            "needs_clarification": needs,
+        }
+
+    def test_metric_less_achievement_goes_to_clarify(self) -> None:
+        state = self._state(
+            achievements=[self._achievement(True)], current_achievement_index=0
+        )
+        assert route_after_mining(state) == "clarify"
+
+    def test_metric_achievement_goes_to_draft(self) -> None:
+        state = self._state(
+            achievements=[self._achievement(False)], current_achievement_index=0
+        )
+        assert route_after_mining(state) == "draft"
+
+    def test_answered_achievement_goes_to_draft(self) -> None:
+        state = self._state(
+            achievements=[self._achievement(True)],
+            current_achievement_index=0,
+            user_response="late returns fell by 30%",
+        )
+        assert route_after_mining(state) == "draft"
+
+
+class TestNextAchievementRouting:
+    def _state(self, **kwargs: object) -> ResumeAgentState:
+        state = initial_state(user_id="u1", thread_id="t1", raw_notes="notes")
+        state.update(kwargs)  # type: ignore[typeddict-item]
+        return state
+
+    def _achievement(self, needs: bool) -> dict[str, object]:
+        return {
+            "id": "ach_1",
+            "raw_text": "worked on the borrowing system",
+            "has_metric": not needs,
+            "needs_clarification": needs,
+        }
+
+    def test_next_metric_less_achievement_goes_to_clarify(self) -> None:
+        state = self._state(
+            achievements=[self._achievement(False), self._achievement(True)],
+            current_achievement_index=1,
+        )
+        assert route_next_achievement(state) == "clarify"
+
+    def test_next_metric_achievement_goes_to_draft(self) -> None:
+        state = self._state(
+            achievements=[self._achievement(False), self._achievement(False)],
+            current_achievement_index=1,
+        )
+        assert route_next_achievement(state) == "draft"
+
+    def test_exhausted_queue_finalizes(self) -> None:
+        state = self._state(
+            achievements=[self._achievement(False)], current_achievement_index=1
+        )
+        assert route_next_achievement(state) == "finalize"
 
 
 class TestValidationRouting:
@@ -99,6 +190,43 @@ class TestValidationRouting:
             repair_attempts=99,
         )
         assert route_after_validation(state) == "flag"
+
+
+class TestMiningDigitGate:
+    """A fragment with no digit cannot carry a metric, whatever the model says."""
+
+    async def _mine(self, has_metric: bool, raw_text: str) -> list[dict[str, object]]:
+        from unittest.mock import AsyncMock, patch
+
+        from app.agents.resume.nodes import mine as mine_module
+        from app.agents.resume.nodes.mine import _MinedAchievement, _MiningResult
+
+        fake_model = AsyncMock()
+        fake_model.ainvoke.return_value = _MiningResult(
+            achievements=[
+                _MinedAchievement(raw_text=raw_text, has_metric=has_metric)
+            ]
+        )
+        with patch.object(mine_module, "structured", return_value=fake_model):
+            state = initial_state(user_id="u1", thread_id="t1", raw_notes=raw_text)
+            result = await mine_module.mine_achievements(state)
+        return result["achievements"]  # type: ignore[return-value]
+
+    def test_model_claim_without_digit_still_needs_clarification(self) -> None:
+        import asyncio
+
+        achievements = asyncio.run(
+            self._mine(True, "worked on the borrowing system")
+        )
+        assert achievements[0]["needs_clarification"] is True
+
+    def test_fragment_with_digit_keeps_model_claim(self) -> None:
+        import asyncio
+
+        achievements = asyncio.run(
+            self._mine(True, "search time dropped by 42%")
+        )
+        assert achievements[0]["needs_clarification"] is False
 
 
 class TestInitialState:
