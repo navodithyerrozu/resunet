@@ -94,6 +94,12 @@ def _bullet_doc(
         "action": "Increased",
         "metric": "student usage from 50 to 200 per month",
         "method": "by optimizing the borrowing system",
+        # Stored shape before the to_mongo fix: computed text was persisted,
+        # and re-validating it raised extra_forbidden. Readers must tolerate it.
+        "text": (
+            "Increased student usage from 50 to 200 per month "
+            "by optimizing the borrowing system."
+        ),
         "status": "approved",
         "source": "agent_generated",
         "violations": [],
@@ -151,6 +157,25 @@ def test_thread_bullets_surface_as_unassigned(collections: dict) -> None:
     )
     ids = [str(b.id) for b in result]
     assert ids == ["444444444444444444444444", "555555555555555555555555"]
+
+
+def test_to_mongo_excludes_computed_text() -> None:
+    """Future writes must not persist the computed field at all."""
+    from app.models.bullet import Bullet
+
+    bullet = Bullet(
+        user_id=str(USER_ID),
+        profile_entry_id=str(ObjectId()),
+        action="Increased",
+        metric="student usage from 50 to 200 per month",
+        method="by optimizing the borrowing system",
+    )
+    doc = bullet.to_mongo()
+    assert "text" not in doc
+    # And a clean doc round-trips through validation.
+    from app.api.v1.routes.resumes import _bullet_from_doc
+
+    assert _bullet_from_doc({**doc, "_id": ObjectId()}).text.startswith("Increased")
 
 
 def test_assigned_bullets_are_excluded(collections: dict) -> None:

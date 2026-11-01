@@ -205,6 +205,19 @@ def _seed_sections(profile: CareerProfile | None) -> list[ResumeSection]:
     return sections
 
 
+def _bullet_from_doc(doc: dict[str, Any]) -> Bullet:
+    """Validate a stored bullet, tolerating docs written before the fix.
+
+    Bullets written before ``to_mongo`` excluded computed fields carry a
+    stored ``text`` key, which ``Bullet.model_validate`` rejects under
+    ``extra="forbid"`` (``text`` is a computed field, derived on read).
+    Dropping it here -- rather than migrating every stored document -- is
+    what keeps old bullets readable.
+    """
+    clean = {key: value for key, value in doc.items() if key != "text"}
+    return Bullet.model_validate(clean)
+
+
 async def _resume_thread_bullets(
     resume: Resume, user: User, *, assigned_ids: set[str]
 ) -> list[Bullet]:
@@ -234,7 +247,7 @@ async def _resume_thread_bullets(
     )
     docs = await cursor
     return [
-        Bullet.model_validate(doc)
+        _bullet_from_doc(doc)
         for doc in docs
         if doc.get("_id") is not None and str(doc["_id"]) not in assigned_ids
     ]
@@ -267,7 +280,7 @@ async def _ordered_bullets(
         {"_id": {"$in": id_values}, **_user_filter(user)}
     )
     docs = await cursor.to_list(length=len(ordered_ids) * 2 + 10)
-    by_id = {str(doc["_id"]): Bullet.model_validate(doc) for doc in docs}
+    by_id = {str(doc["_id"]): _bullet_from_doc(doc) for doc in docs}
     ordered = [by_id[bullet_id] for bullet_id in ordered_ids if bullet_id in by_id]
     return ordered, by_id
 
