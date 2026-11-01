@@ -10,6 +10,7 @@ from __future__ import annotations
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -68,9 +69,19 @@ class Settings(BaseSettings):
     )
 
     # --- LLM --------------------------------------------------------------
+    # Provider switch: "anthropic" (default, unchanged behaviour) or
+    # "ollama" (local model, no API key). Restart the API after changing
+    # this -- get_chat_model() caches the client per temperature.
+    llm_provider: Literal["anthropic", "ollama"] = "anthropic"
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     resume_agent_model: str = "claude-sonnet-4-5-20250929"
+    # Ollama defaults: localhost for a local (non-Docker) API run. Inside
+    # Docker Compose, docker-compose.yml overrides this to
+    # http://host.docker.internal:11434 so the API container reaches the
+    # Ollama server running on the host machine.
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.1:8b"
     resume_agent_temperature: float = Field(default=0.2, ge=0.0, le=1.0)
     xyz_max_repair_attempts: int = Field(
         default=3, ge=1, le=6,

@@ -12,6 +12,8 @@ than discovering the gap three nodes deep.
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field
 
 from app.agents.resume.llm import structured
@@ -79,15 +81,25 @@ async def mine_achievements(state: ResumeAgentState) -> dict[str, object]:
         ]
     )
 
-    achievements: list[CandidateAchievement] = [
-        CandidateAchievement(
-            id=f"ach_{i}",
-            raw_text=item.raw_text,
-            has_metric=item.has_metric,
-            needs_clarification=not item.has_metric,
+    achievements: list[CandidateAchievement] = []
+    for i, item in enumerate(result.achievements):
+        # Deterministic backstop for the model's classification: a metric, by
+        # this product's own definition, contains a number. If the quoted
+        # fragment carries no digit at all, it cannot carry a metric, whatever
+        # the model claimed -- routing it to drafting would invite invention.
+        # (A number spelled out in words is treated the same way: asking the
+        # user to confirm it is safe, drafting from it is not.)
+        needs_clarification = (not item.has_metric) or not re.search(
+            r"\d", item.raw_text or ""
         )
-        for i, item in enumerate(result.achievements)
-    ]
+        achievements.append(
+            CandidateAchievement(
+                id=f"ach_{i}",
+                raw_text=item.raw_text,
+                has_metric=item.has_metric,
+                needs_clarification=needs_clarification,
+            )
+        )
 
     quantified = sum(1 for a in achievements if a["has_metric"])
     logger.info(

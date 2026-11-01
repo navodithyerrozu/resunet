@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { AssignBulletControl } from "@/components/resume/AssignBulletControl";
 import { AtsScorePanel } from "@/components/resume/AtsScorePanel";
 import { GenerationChat } from "@/components/resume/GenerationChat";
 import { RenderTrigger } from "@/components/resume/RenderTrigger";
@@ -149,10 +150,22 @@ export default async function ResumeWorkspacePage({ params }: { params: Params }
               {unassigned.length > 0 ? (
                 <section>
                   <h3 className="mb-3 text-sm font-600">Unassigned</h3>
+                  <p className="mb-3 text-sm text-muted">
+                    Generated bullets land here until you place them. A bullet
+                    does not appear in a render until it is assigned to a
+                    section.
+                  </p>
                   <ul className="space-y-4">
                     {unassigned.map((bullet) => (
                       <li key={bullet.id ?? `${bullet.action}-${bullet.metric}`} className="border-t border-line pt-4">
                         <XyzBullet bullet={bullet} />
+                        {bullet.id !== null && resume.id !== null ? (
+                          <AssignBulletControl
+                            resumeId={resume.id}
+                            bulletId={bullet.id}
+                            sections={orderedSections}
+                          />
+                        ) : null}
                       </li>
                     ))}
                   </ul>

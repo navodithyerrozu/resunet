@@ -158,7 +158,25 @@ async def flag_bullet(state: ResumeAgentState) -> dict[str, object]:
     }
 
 
-def route_next_achievement(state: ResumeAgentState) -> Literal["draft", "finalize"]:
-    """Conditional edge: another achievement to process, or wrap up?"""
+def route_next_achievement(
+    state: ResumeAgentState,
+) -> Literal["draft", "clarify", "finalize"]:
+    """Conditional edge: another achievement to process, or wrap up?
+
+    The next achievement goes through the same pre-draft clarification gate
+    as the first: if mining flagged it as needing a metric, route to clarify
+    before any drafting, or the draft node would invent the missing number
+    (see route_after_mining in graph.py).
+    """
     idx = state.get("current_achievement_index", 0)
-    return "draft" if idx < len(state.get("achievements", [])) else "finalize"
+    achievements = state.get("achievements", [])
+    if idx >= len(achievements):
+        return "finalize"
+    nxt = achievements[idx]
+    if (
+        isinstance(nxt, dict)
+        and nxt.get("needs_clarification")
+        and not state.get("user_response")
+    ):
+        return "clarify"
+    return "draft"

@@ -91,8 +91,18 @@ class MongoModel(AppModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
     def to_mongo(self, *, exclude_none: bool = True) -> dict[str, Any]:
-        """Serialize for insertion, dropping `_id` when unset so Mongo assigns one."""
-        doc = self.model_dump(by_alias=True, exclude_none=exclude_none)
+        """Serialize for insertion, dropping `_id` when unset so Mongo assigns one.
+
+        Computed fields are excluded: they are derived on read (e.g. Bullet
+        text from action/metric/method), and re-validating a stored computed
+        field fails under ``extra="forbid"`` -- a stored ``text`` key makes
+        every later ``Bullet.model_validate`` raise, which is exactly how a
+        dashboard with no section bullets hid until the first bullet was
+        actually read back.
+        """
+        doc = self.model_dump(
+            by_alias=True, exclude_none=exclude_none, exclude_computed_fields=True
+        )
         # `by_alias` now follows `serialization_alias` and yields `id`;
         # Mongo storage still needs `_id`, so rename it back here only.
         if "id" in doc:

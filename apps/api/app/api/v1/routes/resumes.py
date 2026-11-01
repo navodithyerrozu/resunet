@@ -205,6 +205,54 @@ def _seed_sections(profile: CareerProfile | None) -> list[ResumeSection]:
     return sections
 
 
+def _bullet_from_doc(doc: dict[str, Any]) -> Bullet:
+    """Validate a stored bullet, tolerating docs written before the fix.
+
+    Bullets written before ``to_mongo`` excluded computed fields carry a
+    stored ``text`` key, which ``Bullet.model_validate`` rejects under
+    ``extra="forbid"`` (``text`` is a computed field, derived on read).
+    Dropping it here -- rather than migrating every stored document -- is
+    what keeps old bullets readable.
+    """
+    clean = {key: value for key, value in doc.items() if key != "text"}
+    return Bullet.model_validate(clean)
+
+
+async def _resume_thread_bullets(
+    resume: Resume, user: User, *, assigned_ids: set[str]
+) -> list[Bullet]:
+    """Bullets generated for this resume that no section has claimed yet.
+
+    Generation saves bullets against a thread (thread_id), not against a
+    resume section -- see finalize.py -- so the section-only query in
+    ``_ordered_bullets`` can never see them. Joining through agent_threads
+    (whose resume_id is stored) surfaces them as the workspace's "Unassigned"
+    pile, which is where the user assigns them to a section. Render still
+    uses ``_ordered_bullets`` only, so an unassigned bullet can never sneak
+    into a PDF before the user has placed it.
+    """
+    thread_docs = await collection(Collections.AGENT_THREADS).find(
+        {"resume_id": ObjectId(str(resume.id)), **_user_filter(user)}
+    ).to_list(length=1000)
+    thread_ids = [doc["thread_id"] for doc in thread_docs if doc.get("thread_id")]
+    if not thread_ids:
+        return []
+    cursor = (
+        collection(Collections.BULLETS)
+        .find(
+            {"thread_id": {"$in": thread_ids}, **_user_filter(user)},
+            sort=[("created_at", 1)],
+        )
+        .to_list(length=1000)
+    )
+    docs = await cursor
+    return [
+        _bullet_from_doc(doc)
+        for doc in docs
+        if doc.get("_id") is not None and str(doc["_id"]) not in assigned_ids
+    ]
+
+
 async def _ordered_bullets(
     resume: Resume, user: User
 ) -> tuple[list[Bullet], dict[str, Bullet]]:
@@ -232,7 +280,7 @@ async def _ordered_bullets(
         {"_id": {"$in": id_values}, **_user_filter(user)}
     )
     docs = await cursor.to_list(length=len(ordered_ids) * 2 + 10)
-    by_id = {str(doc["_id"]): Bullet.model_validate(doc) for doc in docs}
+    by_id = {str(doc["_id"]): _bullet_from_doc(doc) for doc in docs}
     ordered = [by_id[bullet_id] for bullet_id in ordered_ids if bullet_id in by_id]
     return ordered, by_id
 
@@ -718,13 +766,25 @@ async def generation_turn(
 async def list_bullets(
     resume_id: str, user: CurrentUser, page: PaginationParams
 ) -> Page[Bullet]:
-    """Bullets for the editor pane, in the resume's section order."""
+    """Bullets for the editor pane: section bullets first, then unassigned.
+
+    Section bullets come in the resume's section order; unassigned bullets
+    (generated for this resume, not yet placed in a section) follow in
+    creation order. The workspace page splits the two by section membership,
+    so returning only section bullets -- the old behaviour -- made generated
+    bullets invisible even though they were saved. Rendering deliberately
+    does NOT use this endpoint (see _ordered_bullets), so unassigned bullets
+    still cannot reach a PDF until assigned.
+    """
     resume = Resume.model_validate(await _load_resume_doc(resume_id, user))
     ordered, _ = await _ordered_bullets(resume, user)
-    window = ordered[page.offset : page.offset + page.limit]
+    assigned_ids = {str(b.id) for b in ordered if b.id is not None}
+    unassigned = await _resume_thread_bullets(resume, user, assigned_ids=assigned_ids)
+    all_bullets = ordered + unassigned
+    window = all_bullets[page.offset : page.offset + page.limit]
     return Page[Bullet](
         items=window,
-        total=len(ordered),
+        total=len(all_bullets),
         limit=page.limit,
         offset=page.offset,
     )
