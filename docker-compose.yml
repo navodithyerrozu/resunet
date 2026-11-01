@@ -54,6 +54,10 @@ services:
       RENDER_STORAGE_DIR: /srv/storage/renders
       # The API is deliberately NOT given the credential decryption key.
       CREDENTIAL_ENCRYPTION_KEY: ""
+      # Only used when LLM_PROVIDER=ollama: reach the Ollama server on the
+      # host from inside this container (localhost here would be the
+      # container itself). The .env value stays localhost for local runs.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
     ports:
       - "8000:8000"
     volumes:
