@@ -177,13 +177,19 @@ export function streamResumePdf(resumeId: string, version?: number): Promise<Res
 // Generation agent
 // ---------------------------------------------------------------------------
 
+// Generation turns run several LangGraph nodes and at least one model call.
+// The API enforces a minimum 180s LLM timeout for the Ollama provider, so the
+// frontend deadline must sit above that or a slow first turn (cold model load)
+// aborts in the UI even though the API is still working.
+const GENERATION_TIMEOUT_MS = 210_000;
+
 export function startGeneration(payload: GenerateStartRequest): Promise<GenerateTurnResponse> {
   return apiFetch<GenerateTurnResponse>("/resumes/generate/start", {
     method: "POST",
     body: payload,
     // The first turn runs several LangGraph nodes and at least one model call,
     // so it needs a longer deadline than a plain read.
-    timeoutMs: 60_000,
+    timeoutMs: GENERATION_TIMEOUT_MS,
   });
 }
 
@@ -193,7 +199,7 @@ export function sendGenerationTurn(
 ): Promise<GenerateTurnResponse> {
   return apiFetch<GenerateTurnResponse>(
     `/resumes/generate/${encodeURIComponent(threadId)}/turn`,
-    { method: "POST", body: { message }, timeoutMs: 60_000 },
+    { method: "POST", body: { message }, timeoutMs: GENERATION_TIMEOUT_MS },
   );
 }
 
