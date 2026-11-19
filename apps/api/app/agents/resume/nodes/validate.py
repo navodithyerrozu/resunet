@@ -25,12 +25,24 @@ logger = get_logger(__name__)
 
 
 async def validate_bullet(state: ResumeAgentState) -> dict[str, object]:
-    """Run deterministic XYZ validation on the current draft."""
+    """Run deterministic XYZ validation on the current draft.
+
+    The draft is checked against the source it was built from -- the current
+    achievement's notes plus the full raw notes -- so the method-provenance
+    gate can prove the method's tools appear in the notes, the same way the
+    digit gate in `mine.py` proves a metric's number does.
+    """
     draft = state.get("current_draft")
     if draft is None:
         return {"status": "drafting"}
 
-    violations = draft.validate_xyz(max_chars=MAX_BULLET_CHARS)
+    source_parts = [state.get("raw_notes", "")]
+    achievement = current_achievement(state)
+    if achievement is not None:
+        source_parts.append(str(achievement.get("raw_text", "")))
+    if state.get("user_response"):
+        source_parts.append(str(state.get("user_response")))
+    violations = draft.validate_xyz(max_chars=MAX_BULLET_CHARS, source_text=" ".join(source_parts))
 
     logger.info(
         "agent.validated_bullet",
@@ -62,8 +74,14 @@ def route_after_validation(
       tokens and latency to arrive at the same question. It also removes the
       model's incentive to fabricate, since asking is an available action.
 
-    * **repair** -- fixable defects (weak verb, first person, too long) with
-      budget left. These are genuine rewriting problems the model can solve.
+    * **repair** -- fixable defects (weak verb, first person, too long, or
+      an unproven method) with budget left. An unproven method routes here
+      rather than to clarify: clarify asks the user for a *number*, which is
+      the wrong question for a method, while repair hands the model the exact
+      violation ("use only tools named in the notes") and it can rewrite the
+      method from the notes it already has. If the notes genuinely name no
+      method, repair cannot conjure one either, and the budget rule below
+      flags the bullet instead of accepting it.
 
     * **flag** -- budget exhausted. Save as NEEDS_REVIEW rather than silently
       dropping the bullet or persisting a non-compliant one.
@@ -173,10 +191,6 @@ def route_next_achievement(
     if idx >= len(achievements):
         return "finalize"
     nxt = achievements[idx]
-    if (
-        isinstance(nxt, dict)
-        and nxt.get("needs_clarification")
-        and not state.get("user_response")
-    ):
+    if isinstance(nxt, dict) and nxt.get("needs_clarification") and not state.get("user_response"):
         return "clarify"
     return "draft"
