@@ -31,6 +31,7 @@ export type ResumeSection = Schemas["ResumeSection"];
 export type ContactBlock = Schemas["ContactBlock"];
 
 export type Bullet = Schemas["Bullet"];
+export type BulletUpdate = Schemas["BulletUpdate"];
 export type BulletProposal = Schemas["BulletProposal"];
 export type XYZViolation = Schemas["XYZViolation"];
 
@@ -154,6 +155,7 @@ export const VIOLATION_LABELS: Record<XYZViolationCode, string> = {
   missing_metric: "No number",
   vague_metric: "Thin metric",
   missing_method: "No method",
+  unproven_method: "Unproven method",
   weak_verb: "Weak verb",
   first_person: "First person",
   too_long: "Too long",
