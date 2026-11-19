@@ -151,11 +151,16 @@
 <% for section in sections %>
 \section{<< section.title >>}
 <% for entry in section.entries %>
+<# Section-level bullets (generated bullets with no real profile entry)
+   carry an empty heading; skip the entry line for them so the section
+   title is the only heading above their bullets. #>
+<% if entry.heading %>
 \resumeEntry
   {<< entry.heading >>}
   {<< entry.date_label or "" >>}
   {<< entry.subheading or "" >>}
   {<< entry.location or "" >>}
+<% endif %>
 <% if entry.bullets %>
 \begin{resumeItemize}
 <% for bullet in entry.bullets %>

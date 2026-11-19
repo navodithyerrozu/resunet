@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 
 import { AssignBulletControl } from "@/components/resume/AssignBulletControl";
 import { AtsScorePanel } from "@/components/resume/AtsScorePanel";
+import { EditBulletControl } from "@/components/resume/EditBulletControl";
 import { GenerationChat } from "@/components/resume/GenerationChat";
 import { RenderTrigger } from "@/components/resume/RenderTrigger";
 import { ResumeTemplateSelect, ResumeWorkspaceEditor } from "@/components/resume/ResumeWorkspaceEditor";
@@ -140,6 +141,9 @@ export default async function ResumeWorkspacePage({ params }: { params: Params }
                         {sectionBullets.map((bullet) => (
                           <li key={bullet.id ?? `${bullet.action}-${bullet.metric}`} className="border-t border-line pt-4">
                             <XyzBullet bullet={bullet} />
+                            {bullet.id !== null && resume.id !== null ? (
+                              <EditBulletControl resumeId={resume.id} bullet={bullet} />
+                            ) : null}
                           </li>
                         ))}
                       </ul>
@@ -159,6 +163,9 @@ export default async function ResumeWorkspacePage({ params }: { params: Params }
                     {unassigned.map((bullet) => (
                       <li key={bullet.id ?? `${bullet.action}-${bullet.metric}`} className="border-t border-line pt-4">
                         <XyzBullet bullet={bullet} />
+                        {bullet.id !== null && resume.id !== null ? (
+                          <EditBulletControl resumeId={resume.id} bullet={bullet} />
+                        ) : null}
                         {bullet.id !== null && resume.id !== null ? (
                           <AssignBulletControl
                             resumeId={resume.id}

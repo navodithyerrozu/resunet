@@ -64,10 +64,21 @@ _METRIC_PATTERN = re.compile(
 )
 
 # Openers that signal duty-listing rather than impact.
-_WEAK_OPENERS = frozenset({
-    "responsible", "worked", "helped", "assisted", "participated",
-    "involved", "tasked", "duties", "handled", "supported", "contributed",
-})
+_WEAK_OPENERS = frozenset(
+    {
+        "responsible",
+        "worked",
+        "helped",
+        "assisted",
+        "participated",
+        "involved",
+        "tasked",
+        "duties",
+        "handled",
+        "supported",
+        "contributed",
+    }
+)
 
 # Words that may precede the real verb without changing its meaning:
 # a first-person pronoun ("I", "we") and the auxiliary it pairs with
@@ -76,9 +87,21 @@ _WEAK_OPENERS = frozenset({
 # "responsible". Only leading tokens are skipped -- a weak word buried
 # mid-sentence ("Built a team responsible for ...") is an adjective there,
 # not a duty-listing opener, and must not be flagged.
-_WEAK_OPENER_PREFIXES = frozenset({
-    "i", "we", "my", "our", "me", "us", "was", "were", "am", "is", "are",
-})
+_WEAK_OPENER_PREFIXES = frozenset(
+    {
+        "i",
+        "we",
+        "my",
+        "our",
+        "me",
+        "us",
+        "was",
+        "were",
+        "am",
+        "is",
+        "are",
+    }
+)
 
 
 def _has_weak_opener(action: str) -> str | None:
@@ -96,13 +119,273 @@ def _has_weak_opener(action: str) -> str | None:
     return None
 
 
+_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+
+# Words that carry no evidence about *how* the work was done. A method built
+# only from these -- "using a new API and database schema" -- names nothing
+# the notes could confirm or deny, so it must not count as provenance.
+# Deliberately includes the generic nouns an LLM reaches for when inventing
+# a method (system, platform, schema, workflow) and the filler adjectives
+# (new, streamlined, robust) that make an invented method sound concrete.
+_PROVENANCE_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "of",
+        "to",
+        "in",
+        "on",
+        "for",
+        "with",
+        "by",
+        "from",
+        "at",
+        "as",
+        "into",
+        "through",
+        "via",
+        "using",
+        "used",
+        "use",
+        "uses",
+        "i",
+        "we",
+        "my",
+        "our",
+        "me",
+        "us",
+        "it",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "can",
+        "could",
+        "should",
+        "not",
+        "no",
+        "up",
+        "out",
+        "over",
+        "under",
+        "after",
+        "before",
+        "between",
+        "among",
+        "per",
+        "each",
+        "new",
+        "improved",
+        "improve",
+        "improving",
+        "helped",
+        "help",
+        "worked",
+        "work",
+        "streamlined",
+        "efficient",
+        "better",
+        "best",
+        "various",
+        "multiple",
+        "several",
+        "different",
+        "complete",
+        "full",
+        "entire",
+        "modern",
+        "advanced",
+        "robust",
+        "scalable",
+        "reliable",
+        "effective",
+        "powerful",
+        "simple",
+        "easy",
+        "fast",
+        "quickly",
+        "seamlessly",
+        "successfully",
+        "directly",
+        "end",
+        "system",
+        "systems",
+        "app",
+        "application",
+        "applications",
+        "platform",
+        "platforms",
+        "software",
+        "tool",
+        "tools",
+        "technology",
+        "technologies",
+        "technique",
+        "techniques",
+        "method",
+        "methods",
+        "approach",
+        "approaches",
+        "solution",
+        "solutions",
+        "process",
+        "processes",
+        "workflow",
+        "workflows",
+        "pipeline",
+        "pipelines",
+        "framework",
+        "frameworks",
+        "library",
+        "libraries",
+        "database",
+        "databases",
+        "schema",
+        "schemas",
+        "api",
+        "apis",
+        "service",
+        "services",
+        "code",
+        "codebase",
+        "program",
+        "programs",
+        "website",
+        "web",
+        "data",
+        "information",
+        "feature",
+        "features",
+        "functionality",
+        "component",
+        "components",
+        "module",
+        "modules",
+        "architecture",
+        "infrastructure",
+        "interface",
+        "interfaces",
+        "model",
+        "models",
+        "algorithm",
+        "algorithms",
+        "structure",
+        "structures",
+        "design",
+        "implementation",
+        "development",
+        "engineering",
+        "experience",
+        "experiences",
+        "user",
+        "users",
+        "team",
+        "teams",
+        "business",
+        "project",
+        "projects",
+        "task",
+        "tasks",
+        "job",
+        "company",
+        "product",
+        "products",
+        "result",
+        "results",
+        "outcome",
+        "outcomes",
+        "performance",
+        "quality",
+        "value",
+        "time",
+        "way",
+        "ways",
+        "part",
+        "parts",
+        "thing",
+        "things",
+        "stuff",
+        "one",
+        "two",
+    }
+)
+
+
+def _substantive_tokens(text: str) -> set[str]:
+    """Lowercased tokens that could evidence a method, stopwords removed.
+
+    Single- and two-letter tokens are dropped: they are almost always
+    pronouns, articles, or version noise ("v2"), not tool names.
+    """
+    return {
+        token
+        for token in _TOKEN_PATTERN.findall(text.lower())
+        if len(token) >= 3 and token not in _PROVENANCE_STOPWORDS
+    }
+
+
+def check_method_provenance(method: str, source_text: str) -> XYZViolation | None:
+    """Deterministic check that a draft's method comes from the source notes.
+
+    The mirror of the digit gate in `nodes/mine.py`: the metric gate proves a
+    number was in the notes; this proves the *method* was. A method with no
+    substantive token overlap with the notes is treated as invented -- the
+    live 2026-11-01 failure ("using a new API and database schema" for a
+    borrowing-system note that mentions no API, database, or schema) is the
+    case this exists to catch.
+
+    One shared substantive token is enough to pass: a real method restated in
+    the model's own words ("optimizing the borrowing system") still shares
+    its subject nouns with the notes, while an invented method shares
+    nothing but stopwords. A paraphrase that shares no token at all is
+    flagged rather than trusted -- asking the user or flagging for review
+    is the safe error, exactly as with a missing metric.
+    """
+    method_tokens = _substantive_tokens(method)
+    if not method_tokens:
+        return XYZViolation(
+            code=XYZViolationCode.UNPROVEN_METHOD,
+            message="The Z component names no concrete tool or technique "
+            "that appears in your notes.",
+            hint="Rewrite the method using only tools or techniques named "
+            "in the achievement notes.",
+        )
+    if not method_tokens & _substantive_tokens(source_text):
+        return XYZViolation(
+            code=XYZViolationCode.UNPROVEN_METHOD,
+            message="The Z component names tools or techniques that do not appear in your notes.",
+            hint="Rewrite the method using only tools or techniques named "
+            "in the achievement notes.",
+        )
+    return None
+
+
 class BulletStatus(StrEnum):
     """Lifecycle of a bullet through the generate/validate/approve pipeline."""
 
-    DRAFT = "draft"                  # produced, not yet validated
-    NEEDS_REVIEW = "needs_review"    # failed validation past the repair budget
-    APPROVED = "approved"            # passed validation and/or user-confirmed
-    ARCHIVED = "archived"            # retired, retained for history
+    DRAFT = "draft"  # produced, not yet validated
+    NEEDS_REVIEW = "needs_review"  # failed validation past the repair budget
+    APPROVED = "approved"  # passed validation and/or user-confirmed
+    ARCHIVED = "archived"  # retired, retained for history
 
 
 class BulletSource(StrEnum):
@@ -110,8 +393,8 @@ class BulletSource(StrEnum):
 
     USER_AUTHORED = "user_authored"
     AGENT_GENERATED = "agent_generated"
-    AGENT_REWRITTEN = "agent_rewritten"   # user text improved by the agent
-    IMPORTED = "imported"                 # parsed from an uploaded resume
+    AGENT_REWRITTEN = "agent_rewritten"  # user text improved by the agent
+    IMPORTED = "imported"  # parsed from an uploaded resume
 
 
 class XYZViolationCode(StrEnum):
@@ -125,6 +408,7 @@ class XYZViolationCode(StrEnum):
     MISSING_METRIC = "missing_metric"
     VAGUE_METRIC = "vague_metric"
     MISSING_METHOD = "missing_method"
+    UNPROVEN_METHOD = "unproven_method"
     WEAK_VERB = "weak_verb"
     FIRST_PERSON = "first_person"
     TOO_LONG = "too_long"
@@ -191,12 +475,21 @@ class BulletDraft(ApiModel):
         """
         return f"{self.action} {self.metric} {self.method}.".replace("  ", " ")
 
-    def validate_xyz(self, *, max_chars: int = 240) -> list[XYZViolation]:
+    def validate_xyz(
+        self, *, max_chars: int = 240, source_text: str | None = None
+    ) -> list[XYZViolation]:
         """Deterministic XYZ compliance check.
 
         Runs in code rather than via an LLM judge: it is free, instant, and
         identical across runs, which matters because it gates persistence.
         The LLM is only asked to *fix* what this function reports.
+
+        `source_text`, when given, is the achievement notes the draft was
+        built from. It enables the method-provenance check: a method whose
+        substantive tokens never appear in the notes is flagged as invented,
+        the same way a metric with no number is flagged as missing. Callers
+        that have no source (e.g. a manual bullet edit) omit it and get the
+        shape-only check, unchanged from before.
         """
         violations: list[XYZViolation] = []
 
@@ -247,6 +540,12 @@ class BulletDraft(ApiModel):
                     "distributed data-parallel training'.",
                 )
             )
+        elif source_text is not None:
+            # Only when a method was actually named: a missing method is
+            # already reported above, and provenance of nothing is meaningless.
+            provenance = check_method_provenance(self.method, source_text)
+            if provenance is not None:
+                violations.append(provenance)
 
         if len(self.text) > max_chars:
             violations.append(
@@ -296,7 +595,8 @@ class Bullet(MongoModel):
         description="LangGraph thread that produced this bullet; enables replay.",
     )
     repair_attempts: int = Field(
-        default=0, ge=0,
+        default=0,
+        ge=0,
         description="Repair passes consumed. Guards against unbounded LLM loops.",
     )
 
@@ -320,3 +620,18 @@ class Bullet(MongoModel):
             method=self.method,
             skills=self.skills,
         )
+
+
+class BulletUpdate(ApiModel):
+    """PATCH body for manual bullet editing. Every field optional.
+
+    An edit re-validates the XYZ shape deterministically and resets the
+    bullet to DRAFT, so an edited bullet must be re-approved (POST
+    .../bullets/{id}/approve) before it can reach a render -- editing a
+    metric or method must never silently keep an old APPROVED stamp.
+    """
+
+    action: str | None = Field(default=None, min_length=3, max_length=200)
+    metric: str | None = Field(default=None, min_length=1, max_length=160)
+    method: str | None = Field(default=None, min_length=2, max_length=200)
+    skills: list[str] | None = Field(default=None, max_length=12)

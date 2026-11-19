@@ -46,7 +46,7 @@ function violationsForRole(role: Role, violations: XYZViolation[]): XYZViolation
       case "metric":
         return METRIC_CODES.has(v.code);
       case "method":
-        return v.code === "missing_method";
+        return v.code === "missing_method" || v.code === "unproven_method";
       case "action":
         return (
           v.code === "weak_verb" || v.code === "first_person" || v.code === "past_tense_required"

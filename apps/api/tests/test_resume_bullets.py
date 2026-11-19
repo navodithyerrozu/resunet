@@ -84,9 +84,7 @@ def _resume() -> Resume:
     )
 
 
-def _bullet_doc(
-    *, bullet_id: ObjectId, thread_id: str, created: datetime
-) -> dict[str, Any]:
+def _bullet_doc(*, bullet_id: ObjectId, thread_id: str, created: datetime) -> dict[str, Any]:
     return {
         "_id": bullet_id,
         "user_id": USER_ID,
@@ -97,8 +95,7 @@ def _bullet_doc(
         # Stored shape before the to_mongo fix: computed text was persisted,
         # and re-validating it raised extra_forbidden. Readers must tolerate it.
         "text": (
-            "Increased student usage from 50 to 200 per month "
-            "by optimizing the borrowing system."
+            "Increased student usage from 50 to 200 per month by optimizing the borrowing system."
         ),
         "status": "approved",
         "source": "agent_generated",
@@ -145,16 +142,12 @@ def collections(monkeypatch: pytest.MonkeyPatch) -> dict[Collections, _FakeColle
         ]
     )
     mapping = {Collections.AGENT_THREADS: threads, Collections.BULLETS: bullets}
-    monkeypatch.setattr(
-        "app.api.v1.routes.resumes.collection", lambda name: mapping[name]
-    )
+    monkeypatch.setattr("app.api.v1.routes.resumes.collection", lambda name: mapping[name])
     return mapping
 
 
 def test_thread_bullets_surface_as_unassigned(collections: dict) -> None:
-    result = asyncio.run(
-        _resume_thread_bullets(_resume(), _user(), assigned_ids=set())
-    )
+    result = asyncio.run(_resume_thread_bullets(_resume(), _user(), assigned_ids=set()))
     ids = [str(b.id) for b in result]
     assert ids == ["444444444444444444444444", "555555555555555555555555"]
 
@@ -180,8 +173,80 @@ def test_to_mongo_excludes_computed_text() -> None:
 
 def test_assigned_bullets_are_excluded(collections: dict) -> None:
     result = asyncio.run(
-        _resume_thread_bullets(
-            _resume(), _user(), assigned_ids={"444444444444444444444444"}
-        )
+        _resume_thread_bullets(_resume(), _user(), assigned_ids={"444444444444444444444444"})
     )
     assert [str(b.id) for b in result] == ["555555555555555555555555"]
+
+
+def _bullet(*, bullet_id: str, profile_entry_id: str, action: str = "Increased") -> object:
+    from app.models.bullet import Bullet
+
+    return Bullet(
+        id=bullet_id,
+        user_id=str(USER_ID),
+        profile_entry_id=profile_entry_id,
+        action=action,
+        metric="student usage from 50 to 200 per month",
+        method="by optimizing the borrowing system",
+        status="approved",
+    )
+
+
+def _projects_resume(bullet_ids: list[str]):
+    from app.models.resume import ResumeSection, SectionKind
+
+    resume = _resume()
+    resume.sections = [
+        ResumeSection(
+            kind=SectionKind.PROJECTS,
+            title="Projects",
+            order=2,
+            entry_ids=[],
+            bullet_ids=bullet_ids,
+        )
+    ]
+    return resume
+
+
+def test_generated_bullets_share_one_section_entry() -> None:
+    """Regression: each generated bullet used to render under its own
+    "Projects" heading, because every generation run mints a fresh random
+    profile-entry id. Bullets with no real profile entry now share one
+    section-level entry, so the section heading prints once."""
+    from app.api.v1.routes.resumes import _rendered_sections
+
+    b1 = _bullet(bullet_id="444444444444444444444444", profile_entry_id=str(ObjectId()))
+    b2 = _bullet(bullet_id="555555555555555555555555", profile_entry_id=str(ObjectId()))
+    rendered = _rendered_sections(
+        _projects_resume(["444444444444444444444444", "555555555555555555555555"]),
+        [b1, b2],  # type: ignore[list-item]
+        None,
+    )
+    assert len(rendered) == 1
+    entries = rendered[0].entries
+    assert len(entries) == 1
+    assert entries[0].heading == ""
+    assert len(entries[0].bullets) == 2
+
+
+def test_real_profile_entry_keeps_its_own_heading() -> None:
+    """Bullets attached to a real project still render under that
+    project's heading; only entry-less generated bullets collapse."""
+    from app.api.v1.routes.resumes import _rendered_sections
+    from app.models.profile import CareerProfile, ProjectEntry
+
+    entry_id = str(ObjectId())
+    profile = CareerProfile(
+        user_id=str(USER_ID),
+        contact=ContactBlock(full_name="Alice Example", email="alice@example.com"),
+        projects=[ProjectEntry(entry_id=entry_id, name="ResuNet")],
+    )
+    b1 = _bullet(bullet_id="444444444444444444444444", profile_entry_id=entry_id)
+    b2 = _bullet(bullet_id="555555555555555555555555", profile_entry_id=str(ObjectId()))
+    rendered = _rendered_sections(
+        _projects_resume(["444444444444444444444444", "555555555555555555555555"]),
+        [b1, b2],  # type: ignore[list-item]
+        profile,
+    )
+    headings = [(e.heading, len(e.bullets)) for e in rendered[0].entries]
+    assert headings == [("ResuNet", 1), ("", 1)]
