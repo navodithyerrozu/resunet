@@ -484,6 +484,13 @@ export type components = {
 
     BulletStatus: "draft" | "needs_review" | "approved" | "archived";
 
+    BulletUpdate: {
+      action?: string | null;
+      metric?: string | null;
+      method?: string | null;
+      skills?: string[] | null;
+    };
+
     CareerProfile: {
       id: string | null;
       created_at: string;
@@ -1002,6 +1009,7 @@ export type components = {
       | "missing_metric"
       | "vague_metric"
       | "missing_method"
+      | "unproven_method"
       | "weak_verb"
       | "first_person"
       | "too_long"
