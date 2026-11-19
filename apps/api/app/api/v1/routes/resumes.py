@@ -35,6 +35,7 @@ from bson import ObjectId
 from fastapi import APIRouter, Query, status
 from fastapi.responses import FileResponse
 from langgraph.types import Command
+from pydantic import ValidationError
 
 from app.agents.checkpointer import thread_config
 from app.agents.resume.graph import get_compiled_graph
@@ -58,6 +59,7 @@ from app.models.bullet import (
     Bullet,
     BulletDraft,
     BulletStatus,
+    BulletUpdate,
     XYZViolation,
 )
 from app.models.profile import CareerProfile, ContactBlock
@@ -231,9 +233,11 @@ async def _resume_thread_bullets(
     uses ``_ordered_bullets`` only, so an unassigned bullet can never sneak
     into a PDF before the user has placed it.
     """
-    thread_docs = await collection(Collections.AGENT_THREADS).find(
-        {"resume_id": ObjectId(str(resume.id)), **_user_filter(user)}
-    ).to_list(length=1000)
+    thread_docs = (
+        await collection(Collections.AGENT_THREADS)
+        .find({"resume_id": ObjectId(str(resume.id)), **_user_filter(user)})
+        .to_list(length=1000)
+    )
     thread_ids = [doc["thread_id"] for doc in thread_docs if doc.get("thread_id")]
     if not thread_ids:
         return []
@@ -253,9 +257,7 @@ async def _resume_thread_bullets(
     ]
 
 
-async def _ordered_bullets(
-    resume: Resume, user: User
-) -> tuple[list[Bullet], dict[str, Bullet]]:
+async def _ordered_bullets(resume: Resume, user: User) -> tuple[list[Bullet], dict[str, Bullet]]:
     """Bullets for a resume, in section order.
 
     Mongo does not preserve `$in` ordering, so the order is restored in
@@ -276,9 +278,7 @@ async def _ordered_bullets(
     for bullet_id in ordered_ids:
         id_values.append(ObjectId(bullet_id) if ObjectId.is_valid(bullet_id) else bullet_id)
         id_values.append(bullet_id)
-    cursor = collection(Collections.BULLETS).find(
-        {"_id": {"$in": id_values}, **_user_filter(user)}
-    )
+    cursor = collection(Collections.BULLETS).find({"_id": {"$in": id_values}, **_user_filter(user)})
     docs = await cursor.to_list(length=len(ordered_ids) * 2 + 10)
     by_id = {str(doc["_id"]): _bullet_from_doc(doc) for doc in docs}
     ordered = [by_id[bullet_id] for bullet_id in ordered_ids if bullet_id in by_id]
@@ -301,18 +301,34 @@ def _ensure_entry(
     section_title: str,
     entry_id: str,
 ) -> RenderedEntry:
-    """Get or create a rendered entry, preserving first-seen order."""
+    """Get or create a rendered entry, preserving first-seen order.
+
+    Entries keyed ``__section__:<kind>`` are the section-level pile for
+    generated bullets whose profile-entry id has no real profile entry
+    behind it (see `_rendered_sections`). They carry no heading of their
+    own -- the template skips the heading line for them -- so the section
+    title prints exactly once instead of once per bullet.
+    """
     if entry_id not in entries:
-        heading, location, date_label, _ = entry_meta.get(
-            entry_id, (section_title, None, "", None)
-        )
-        entries[entry_id] = RenderedEntry(
-            entry_id=entry_id,
-            heading=heading,
-            subheading=location,
-            date_label=date_label,
-            location=location,
-        )
+        if entry_id.startswith("__section__:"):
+            entries[entry_id] = RenderedEntry(
+                entry_id=entry_id,
+                heading="",
+                subheading=None,
+                date_label="",
+                location=None,
+            )
+        else:
+            heading, location, date_label, _ = entry_meta.get(
+                entry_id, (section_title, None, "", None)
+            )
+            entries[entry_id] = RenderedEntry(
+                entry_id=entry_id,
+                heading=heading,
+                subheading=location,
+                date_label=date_label,
+                location=location,
+            )
         order.append(entry_id)
     return entries[entry_id]
 
@@ -367,10 +383,22 @@ def _rendered_sections(
             bullet = by_bullet_id.get(str(bullet_id))
             if bullet is None:
                 continue
-            entry = _ensure_entry(
-                entries, order, entry_meta, section.title, str(bullet.profile_entry_id)
-            )
-            entry.bullets.append(
+            # Generated bullets carry a random profile-entry id (one per
+            # generation run, see finalize.py) with no real profile entry
+            # behind it. Grouping by that id used to render each bullet
+            # under its own entry heading -- the section title repeated
+            # once per bullet. All such bullets in one section now share a
+            # single section-level entry instead, so the section heading
+            # prints once. Bullets whose entry is a real profile entry
+            # keep their own heading, as before.
+            entry_id = str(bullet.profile_entry_id)
+            if entry_id not in entry_meta:
+                entry_id = f"__section__:{section.kind.value}"
+            # Named `rendered_entry`, not `entry`: mypy would otherwise read
+            # the variable as the ExperienceEntry from the entry_meta loop
+            # above, which has no `bullets`.
+            rendered_entry = _ensure_entry(entries, order, entry_meta, section.title, entry_id)
+            rendered_entry.bullets.append(
                 RenderedBullet(
                     bullet_id=str(bullet.id),
                     text=bullet.text,
@@ -507,8 +535,9 @@ async def list_resumes(user: CurrentUser, page: PaginationParams) -> Page[Resume
     )
 
 
-@router.post("", response_model=Resume, status_code=status.HTTP_201_CREATED,
-             summary="Create a resume")
+@router.post(
+    "", response_model=Resume, status_code=status.HTTP_201_CREATED, summary="Create a resume"
+)
 async def create_resume(payload: ResumeCreate, user: CurrentUser) -> Resume:
     """Create a resume, seeded from the career profile when one exists.
 
@@ -596,9 +625,7 @@ async def _check_generation_rate_limit(user: User) -> None:
         {**_user_filter(user), "created_at": {"$gte": since}}
     )
     if count >= settings.agent_rate_limit_per_hour:
-        raise RateLimitedError(
-            "Generation rate limit reached. Try again in an hour."
-        )
+        raise RateLimitedError("Generation rate limit reached. Try again in an hour.")
 
 
 def _entry_raw_notes(profile: CareerProfile | None, entry_id: str | None) -> str:
@@ -610,9 +637,7 @@ def _entry_raw_notes(profile: CareerProfile | None, entry_id: str | None) -> str
     return ""
 
 
-async def _target_keywords(
-    job_id: str | None, resume: Resume | None
-) -> list[str]:
+async def _target_keywords(job_id: str | None, resume: Resume | None) -> list[str]:
     target = job_id or (str(resume.target_job_id) if resume is not None else None)
     if target is None or not ObjectId.is_valid(target):
         return []
@@ -763,9 +788,7 @@ async def generation_turn(
     response_model=Page[Bullet],
     summary="List bullets attached to a resume",
 )
-async def list_bullets(
-    resume_id: str, user: CurrentUser, page: PaginationParams
-) -> Page[Bullet]:
+async def list_bullets(resume_id: str, user: CurrentUser, page: PaginationParams) -> Page[Bullet]:
     """Bullets for the editor pane: section bullets first, then unassigned.
 
     Section bullets come in the resume's section order; unassigned bullets
@@ -790,6 +813,111 @@ async def list_bullets(
     )
 
 
+async def _bullet_belongs_to_resume(resume: Resume, user: User, bullet_id: str) -> bool:
+    """True when the bullet is in one of the resume's sections or was
+    generated for it (the unassigned pile). Editing a bullet that belongs
+    to another resume -- or to no resume at all -- is a 404, not a 200."""
+    ordered, _ = await _ordered_bullets(resume, user)
+    if any(str(b.id) == bullet_id for b in ordered if b.id is not None):
+        return True
+    assigned_ids = {str(b.id) for b in ordered if b.id is not None}
+    unassigned = await _resume_thread_bullets(resume, user, assigned_ids=assigned_ids)
+    return any(str(b.id) == bullet_id for b in unassigned if b.id is not None)
+
+
+@router.patch(
+    "/{resume_id}/bullets/{bullet_id}",
+    response_model=Bullet,
+    summary="Edit a bullet",
+)
+async def update_bullet(
+    resume_id: str, bullet_id: str, payload: BulletUpdate, user: CurrentUser
+) -> Bullet:
+    """Manually edit a bullet's XYZ components.
+
+    The merged bullet is re-validated deterministically (same
+    `BulletDraft.validate_xyz` the agent uses); an edit that breaks XYZ is
+    rejected with 422 and nothing is stored. A successful edit resets the
+    status to DRAFT and clears violations, so the edited bullet must be
+    re-approved (POST .../bullets/{id}/approve) before it can reach a
+    render -- an edit must never silently keep an old APPROVED stamp.
+    Provenance is not re-checked here: a manual edit has no source notes,
+    and the author is the user, not the agent.
+    """
+    resume = Resume.model_validate(await _load_resume_doc(resume_id, user))
+    bullet = _bullet_from_doc(await fetch_owned(Collections.BULLETS, bullet_id, user))
+    if not await _bullet_belongs_to_resume(resume, user, bullet_id):
+        raise NotFoundError()
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        return bullet
+    merged = {
+        "action": bullet.action,
+        "metric": bullet.metric,
+        "method": bullet.method,
+        "skills": bullet.skills,
+        **updates,
+    }
+    try:
+        candidate = BulletDraft(**merged)
+    except ValidationError as exc:
+        raise ValidationFailedError(str(exc)) from exc
+    violations = candidate.validate_xyz()
+    if violations:
+        raise ValidationFailedError(
+            "Edited bullet fails XYZ validation: " + "; ".join(v.message for v in violations)
+        )
+    stored = {
+        **updates,
+        "status": BulletStatus.DRAFT.value,
+        "violations": [],
+        "updated_at": utcnow(),
+    }
+    await collection(Collections.BULLETS).update_one(
+        {"_id": ObjectId(bullet_id)}, {"$set": _bson_safe(stored)}
+    )
+    doc = await fetch_owned(Collections.BULLETS, bullet_id, user)
+    return _bullet_from_doc(doc)
+
+
+@router.post(
+    "/{resume_id}/bullets/{bullet_id}/approve",
+    response_model=Bullet,
+    summary="Re-approve an edited bullet",
+)
+async def approve_bullet(resume_id: str, bullet_id: str, user: CurrentUser) -> Bullet:
+    """Mark a bullet APPROVED after manual editing.
+
+    Re-checks XYZ compliance at approval time rather than trusting the
+    edit: a bullet that fails validation cannot be approved, so it cannot
+    reach a render. Approving an already-approved bullet is a no-op success.
+    """
+    resume = Resume.model_validate(await _load_resume_doc(resume_id, user))
+    bullet = _bullet_from_doc(await fetch_owned(Collections.BULLETS, bullet_id, user))
+    if not await _bullet_belongs_to_resume(resume, user, bullet_id):
+        raise NotFoundError()
+    violations = bullet.as_draft().validate_xyz()
+    if violations:
+        raise ValidationFailedError(
+            "Bullet fails XYZ validation and cannot be approved: "
+            + "; ".join(v.message for v in violations)
+        )
+    if bullet.status is not BulletStatus.APPROVED:
+        await collection(Collections.BULLETS).update_one(
+            {"_id": ObjectId(bullet_id)},
+            {
+                "$set": {
+                    "status": BulletStatus.APPROVED.value,
+                    "violations": [],
+                    "updated_at": utcnow(),
+                }
+            },
+        )
+        doc = await fetch_owned(Collections.BULLETS, bullet_id, user)
+        return _bullet_from_doc(doc)
+    return bullet
+
+
 # ---------------------------------------------------------------------------
 # Versions and rendering
 # ---------------------------------------------------------------------------
@@ -801,9 +929,7 @@ async def list_bullets(
     status_code=status.HTTP_202_ACCEPTED,
     summary="Freeze a version and queue a PDF render",
 )
-async def render_resume(
-    resume_id: str, payload: RenderRequest, user: CurrentUser
-) -> RenderJob:
+async def render_resume(resume_id: str, payload: RenderRequest, user: CurrentUser) -> RenderJob:
     """Snapshot the resume into an immutable version and queue the compile.
 
     202 rather than 200 because the PDF does not exist yet -- the client polls
@@ -842,9 +968,7 @@ async def render_resume(
         certifications=profile.certifications if profile is not None else [],
         change_note=payload.change_note,
     )
-    version_doc = _mongo_doc(
-        version, oid_fields=("resume_id", "user_id")
-    )
+    version_doc = _mongo_doc(version, oid_fields=("resume_id", "user_id"))
     version_result = await collection(Collections.RESUME_VERSIONS).insert_one(version_doc)
     version_doc["_id"] = version_result.inserted_id
     await collection(Collections.RESUMES).update_one(
@@ -987,7 +1111,9 @@ async def stream_resume_pdf(
 ) -> FileResponse:
     """Ownership-checked PDF bytes for the Next.js same-origin iframe proxy."""
     doc = await _owned_version_with_pdf(
-        user=user, resume_id=resume_id, version_number=v,
+        user=user,
+        resume_id=resume_id,
+        version_number=v,
     )
     pdf_path = doc.get("pdf_path")
     if not isinstance(pdf_path, str):
@@ -1005,11 +1131,11 @@ async def stream_resume_pdf(
     summary="Stream the compiled PDF for a specific version",
     response_class=FileResponse,
 )
-async def stream_version_pdf(
-    resume_id: str, version_id: str, user: CurrentUser
-) -> FileResponse:
+async def stream_version_pdf(resume_id: str, version_id: str, user: CurrentUser) -> FileResponse:
     doc = await _owned_version_with_pdf(
-        user=user, resume_id=resume_id, version_id=version_id,
+        user=user,
+        resume_id=resume_id,
+        version_id=version_id,
     )
     pdf_path = doc.get("pdf_path")
     if not isinstance(pdf_path, str):
