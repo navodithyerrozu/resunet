@@ -8,6 +8,7 @@ import type {
   ApplicationStatus,
   ApplicationSummary,
   Bullet,
+  BulletUpdate,
   GenerateStartRequest,
   GenerateTurnResponse,
   JobSummary,
@@ -134,6 +135,32 @@ export async function listAllBullets(resumeId: string): Promise<Page<Bullet>> {
     items.push(...page.items);
   }
   return { items, total: first.total, limit: items.length, offset: 0 };
+}
+
+/**
+ * Manually edit a bullet's XYZ components.
+ *
+ * The API re-validates the merged bullet and resets it to DRAFT, so an
+ * edited bullet must be re-approved with `approveBullet` before it can
+ * reach a render.
+ */
+export function updateBullet(
+  resumeId: string,
+  bulletId: string,
+  payload: BulletUpdate,
+): Promise<Bullet> {
+  return apiFetch<Bullet>(
+    `/resumes/${encodeURIComponent(resumeId)}/bullets/${encodeURIComponent(bulletId)}`,
+    { method: "PATCH", body: payload, tags: [`resume:${resumeId}:bullets`] },
+  );
+}
+
+/** Re-approve an edited bullet after its XYZ re-check passes. */
+export function approveBullet(resumeId: string, bulletId: string): Promise<Bullet> {
+  return apiFetch<Bullet>(
+    `/resumes/${encodeURIComponent(resumeId)}/bullets/${encodeURIComponent(bulletId)}/approve`,
+    { method: "POST", tags: [`resume:${resumeId}:bullets`] },
+  );
 }
 
 /**
