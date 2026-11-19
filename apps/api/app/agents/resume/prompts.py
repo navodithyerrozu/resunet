@@ -107,7 +107,10 @@ introduce new violations.
 The same hard rules apply. In particular: if the violation is a missing metric \
 and you do not have a real number available, do NOT invent one. Return the \
 draft with the metric field unchanged; the system will ask the candidate \
-directly. That is the correct behaviour, not a failure.\
+directly. That is the correct behaviour, not a failure. Likewise, if the \
+violation is an unproven method, rewrite the method using only tools or \
+techniques named in the achievement notes -- do not keep a method the notes \
+never mention, and do not swap in a different invented one.\
 """
 
 REPAIR_USER = """\
